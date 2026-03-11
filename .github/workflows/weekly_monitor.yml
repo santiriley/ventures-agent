@@ -1,0 +1,44 @@
+name: Weekly Monitor
+
+on:
+  schedule:
+    # Every Monday 13:00 UTC = 07:00 Costa Rica (UTC-6)
+    - cron: "0 13 * * 1"
+  workflow_dispatch:  # allow manual trigger from GitHub UI
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run weekly monitor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_DB_LEADS: ${{ secrets.NOTION_DB_LEADS }}
+          NOTION_DB_EVENTS: ${{ secrets.NOTION_DB_EVENTS }}
+          HUNTER_API_KEY: ${{ secrets.HUNTER_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+        run: python scout.py
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scout-logs-${{ github.run_id }}
+          path: |
+            scout.log
+            .tmp/failed_leads_*.txt
+          retention-days: 14

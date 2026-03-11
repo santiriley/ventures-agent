@@ -1,0 +1,417 @@
+"""
+enrichment/engine.py — Core enrichment logic for Carica Scout.
+
+Primary functions:
+  enrich_with_claude(raw_input)  → structured CompanyProfile
+  geo_score(founder)             → GeoResult (score 0-4 + signals)
+  thesis_score(profile)          → ThesisResult (score 1-5 + rationale)
+  find_contact(company, founder) → ContactResult (email + confidence)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import anthropic
+import requests
+
+import config
+
+logger = logging.getLogger(__name__)
+
+
+# ── Data models ─────────────────────────────────────────────────────────────
+
+@dataclass
+class Founder:
+    name: str = ""
+    linkedin_url: str = ""
+    education: list[str] = field(default_factory=list)
+    previous_roles: list[str] = field(default_factory=list)
+    location: str = ""
+    phone_prefix: str = ""
+    university: str = ""
+    company_country: str = ""          # set from CompanyProfile.country before geo_score()
+    geo_score: int = 0
+    geo_signals: list[str] = field(default_factory=list)
+    linkedin_uncertain: bool = False   # True when LinkedIn data is inferred, not scraped
+
+
+@dataclass
+class ContactResult:
+    email: str = ""
+    confidence: str = "⚠️ Manual"   # High / Medium / Unverified / N/A / ⚠️ Generic / ⚠️ Manual
+
+
+@dataclass
+class ThesisResult:
+    score: int = 0
+    stars: str = ""
+    rationale: str = ""
+
+
+@dataclass
+class CompanyProfile:
+    name: str = ""
+    website: str = ""
+    one_liner: str = ""
+    sector: str = ""
+    stage: str = ""
+    country: str = ""
+    founders: list[Founder] = field(default_factory=list)
+    thesis: ThesisResult = field(default_factory=ThesisResult)
+    contact: ContactResult = field(default_factory=ContactResult)
+    source: str = ""
+    date_found: str = ""
+    notes: str = ""
+    raw_input: str = ""
+
+
+# ── GeoScore ────────────────────────────────────────────────────────────────
+
+def geo_score(founder: Founder) -> Founder:
+    """
+    Score a founder's CA/DR connection across 4 signals.
+    Mutates and returns the founder with geo_score and geo_signals set.
+
+    Signals:
+      1. University attended is a CA/DR institution
+      2. Phone number carries a CA/DR prefix
+      3. LinkedIn location or bio mentions a CA/DR city or country
+      4. Company HQ or incorporation country is in the region
+    """
+    signals: list[str] = []
+
+    # Signal 1: University
+    uni = (founder.university or "").upper()
+    for ca_uni in config.CA_DR_UNIVERSITIES:
+        if ca_uni.upper() in uni:
+            signals.append(f"University: {founder.university}")
+            break
+
+    # Signal 2: Phone prefix — check all valid CA/DR prefixes (DR has +1809/+1829/+1849)
+    raw_prefix = (founder.phone_prefix or "").replace("-", "").replace(" ", "")
+    for pfx in config.CA_DR_PHONE_PREFIXES:
+        if raw_prefix.startswith(pfx.replace("-", "")):
+            signals.append(f"Phone prefix: {founder.phone_prefix}")
+            break
+
+    # Signal 3: LinkedIn location mentions CA/DR
+    location_lower = (founder.location or "").lower()
+    for country in config.CA_DR_COUNTRY_NAMES:
+        if country.lower() in location_lower:
+            signals.append(f"LinkedIn location: {founder.location}")
+            break
+
+    # Signal 4: Company HQ/country in region
+    company_country = (founder.company_country or "").lower()
+    for country in config.CA_DR_COUNTRY_NAMES:
+        if country.lower() in company_country:
+            signals.append(f"Company HQ: {founder.company_country}")
+            break
+
+    founder.geo_score = len(signals)
+    founder.geo_signals = signals
+    return founder
+
+
+# ── ThesisScore ─────────────────────────────────────────────────────────────
+
+def thesis_score(profile: CompanyProfile) -> ThesisResult:
+    """
+    Score a CompanyProfile against the Carica VC investment thesis.
+    Returns a ThesisResult with score (1-5), stars label, and written rationale.
+    """
+    has_tech = bool(profile.sector)  # sector populated = tech confirmed by Claude
+    has_mvp = profile.stage.lower() not in ("idea", "pre-mvp", "")
+
+    # Find best founder geo score
+    founder_geo_scores = [f.geo_score for f in profile.founders] if profile.founders else [0]
+    best_geo = max(founder_geo_scores) if founder_geo_scores else 0
+
+    # Check for traction signals (keywords in one_liner or notes)
+    traction_keywords = [
+        "revenue", "mrr", "arr", "users", "customers", "clients",
+        "growth", "raised", "seed", "pre-seed", "series",
+        "traction", "paying",
+    ]
+    has_traction = any(
+        kw in (profile.one_liner + " " + profile.notes).lower()
+        for kw in traction_keywords
+    )
+
+    if best_geo >= 2 and has_tech and has_mvp and has_traction:
+        score, rationale = 5, "CA/DR founder confirmed with tech product, live MVP, and traction signals."
+    elif best_geo >= 2 and has_tech and has_mvp:
+        score, rationale = 4, "CA/DR founder confirmed with tech product and live MVP."
+    elif best_geo >= 2 and has_tech:
+        score, rationale = 3, "Likely CA/DR founder (2+ geo signals) with tech foundation; MVP status unclear."
+    elif best_geo < 2 and has_tech:
+        # Check if explicitly targeting region
+        region_target = any(
+            c.lower() in (profile.one_liner + " " + profile.notes).lower()
+            for c in config.CA_DR_COUNTRY_NAMES
+        )
+        if region_target:
+            score, rationale = 2, "External founder explicitly targeting CA/DR market with tech product."
+        else:
+            score, rationale = 1, "Weak CA/DR signal — fewer than 2 geo signals; flagged for manual analyst review."
+    else:
+        score, rationale = 1, "Insufficient signals for thesis match; flagged for manual analyst review."
+
+    stars = config.THESIS_SCORE_LABELS.get(score, "")
+    return ThesisResult(score=score, stars=stars, rationale=rationale)
+
+
+# ── FindContact ─────────────────────────────────────────────────────────────
+
+def find_contact(company_website: str, founder: Founder | None = None) -> ContactResult:
+    """
+    Attempt to find a contact email for a company/founder.
+
+    Priority:
+      1. Scrape company website for personal email
+      2. Construct pattern + verify via Hunter.io (if key available)
+      3. Return constructed pattern as Unverified
+      4. Fall back to ⚠️ Manual
+    """
+    # Step 1: Scrape website for personal email
+    if company_website:
+        scraped = _scrape_email(company_website)
+        if scraped:
+            if _is_generic_email(scraped):
+                return ContactResult(email=scraped, confidence="⚠️ Generic")
+            return ContactResult(email=scraped, confidence="High")
+
+    # Step 2: Try Hunter.io
+    hunter_key = config.get_optional_key("HUNTER_API_KEY")
+    domain = _extract_domain(company_website)
+
+    if hunter_key and domain:
+        hunter_result = _query_hunter(domain, founder, hunter_key)
+        if hunter_result:
+            return hunter_result
+
+    # Step 3: Construct pattern (unverified)
+    if founder and founder.name and domain:
+        pattern = _construct_email_pattern(founder.name, domain)
+        if pattern:
+            confidence = "Unverified"
+            return ContactResult(email=pattern, confidence=confidence)
+
+    # Step 4: LinkedIn DM only
+    if founder and founder.linkedin_url:
+        return ContactResult(email="", confidence="N/A")
+
+    return ContactResult(email="", confidence="⚠️ Manual")
+
+
+def _scrape_email(url: str) -> str:
+    """Scrape a URL for email addresses."""
+    try:
+        resp = requests.get(
+            url,
+            timeout=config.REQUEST_TIMEOUT,
+            headers={"User-Agent": config.USER_AGENT},
+        )
+        emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", resp.text)
+        # Filter out common false positives
+        emails = [e for e in emails if not e.endswith((".png", ".jpg", ".svg"))]
+        if emails:
+            return emails[0]
+    except Exception:
+        pass
+    return ""
+
+
+def _is_generic_email(email: str) -> bool:
+    generic_prefixes = ("info", "hello", "contact", "hola", "support", "team", "hi")
+    local = email.split("@")[0].lower()
+    return local in generic_prefixes
+
+
+def _extract_domain(url: str) -> str:
+    match = re.search(r"https?://(?:www\.)?([^/]+)", url or "")
+    return match.group(1) if match else ""
+
+
+def _query_hunter(domain: str, founder: Founder | None, api_key: str) -> ContactResult | None:
+    try:
+        params: dict[str, Any] = {"domain": domain, "api_key": api_key}
+        if founder and founder.name:
+            parts = founder.name.strip().split()
+            if len(parts) >= 2:
+                params["first_name"] = parts[0]
+                params["last_name"] = parts[-1]
+        resp = requests.get(
+            f"{config.HUNTER_BASE_URL}/email-finder",
+            params=params,
+            timeout=config.REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 401:
+            logger.warning("Hunter.io auth failed — check HUNTER_API_KEY.")
+            return None
+        if resp.status_code == 429:
+            logger.warning("Hunter.io rate limit reached — skipping for this run.")
+            return None
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+        email = data.get("email", "")
+        if email:
+            return ContactResult(email=email, confidence="Medium")
+    except Exception as exc:
+        logger.warning(f"Hunter.io lookup failed for {domain}: {exc}")
+    return None
+
+
+def _construct_email_pattern(name: str, domain: str) -> str:
+    parts = name.strip().lower().split()
+    if len(parts) >= 2:
+        first, last = parts[0], parts[-1]
+        return f"{first}.{last}@{domain}"
+    elif parts:
+        return f"{parts[0]}@{domain}"
+    return ""
+
+
+# ── EnrichWithClaude ────────────────────────────────────────────────────────
+
+ENRICH_SYSTEM_PROMPT = """You are the Carica Scout enrichment engine.
+Given raw information about a startup (name, URL, text, or a mix), extract a structured profile.
+
+Return ONLY valid JSON matching this schema:
+{
+  "name": "Company name",
+  "website": "https://...",
+  "one_liner": "One sentence description",
+  "sector": "e.g. Fintech / Healthtech / SaaS / ...",
+  "stage": "pre-seed / seed / series-a / unknown",
+  "country": "HQ country",
+  "founders": [
+    {
+      "name": "Full Name",
+      "linkedin_url": "https://linkedin.com/in/...",
+      "education": ["University Name (Year)"],
+      "previous_roles": ["Role at Company"],
+      "location": "City, Country (from LinkedIn)",
+      "phone_prefix": "+506",
+      "university": "University short name"
+    }
+  ],
+  "notes": "Anything unusual or noteworthy"
+}
+
+Rules:
+- Use null for unknown fields, not empty strings
+- Never invent information not present in the source
+- If multiple founders exist, include all
+- Sector must reflect the tech foundation (software, platform, API, data, hardware)
+- Stage: only use known stages — if unclear, use "unknown"
+"""
+
+
+def enrich_with_claude(raw_input: str, source: str = "manual") -> CompanyProfile:
+    """
+    Use Claude to extract a structured CompanyProfile from raw input.
+    raw_input can be: company name, URL, pasted text, email, WhatsApp message, etc.
+
+    If TAVILY_API_KEY is set (or a website can be inferred), web research is
+    fetched first and appended to raw_input to give Claude richer context.
+    """
+    from tools.research import research_company
+
+    # ── Step 0: Quick heuristic to detect URL or bare name in raw_input ──────
+    url_match = re.search(r"https?://\S+", raw_input)
+    detected_url = url_match.group(0) if url_match else None
+    # For bare names, research_company will do a Tavily search by name alone
+    detected_name = raw_input.strip().split("\n")[0][:80]
+
+    research_context = research_company(detected_name, detected_url)
+
+    # Append web research so Claude has real data, not just the raw input
+    enriched_input = raw_input
+    if research_context:
+        enriched_input = (
+            f"{raw_input}\n\n"
+            f"--- Additional web research (use to fill gaps, do not invent) ---\n"
+            f"{research_context}"
+        )
+
+    client = anthropic.Anthropic(api_key=config.get_key("ANTHROPIC_API_KEY"))
+
+    message = client.messages.create(
+        model=config.CLAUDE_MODEL,
+        max_tokens=2048,
+        system=ENRICH_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": enriched_input}],
+    )
+
+    raw_json = message.content[0].text.strip()
+
+    # Strip markdown code fences if present
+    raw_json = re.sub(r"^```(?:json)?\s*", "", raw_json)
+    raw_json = re.sub(r"\s*```$", "", raw_json)
+
+    # If Claude added a preamble before the JSON object, extract just the JSON
+    brace_start = raw_json.find("{")
+    brace_end = raw_json.rfind("}")
+    if brace_start > 0 and brace_end > brace_start:
+        raw_json = raw_json[brace_start:brace_end + 1]
+
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Claude returned invalid JSON: {exc}\n\nRaw:\n{raw_json}") from exc
+
+    # Build profile
+    profile = CompanyProfile(
+        name=data.get("name") or "",
+        website=data.get("website") or "",
+        one_liner=data.get("one_liner") or "",
+        sector=data.get("sector") or "",
+        stage=(data.get("stage") or "").lower(),
+        country=data.get("country") or "",
+        notes=data.get("notes") or "",
+        source=source,
+        raw_input=raw_input,
+    )
+
+    # Build founders
+    for fd in data.get("founders") or []:
+        founder = Founder(
+            name=fd.get("name") or "",
+            linkedin_url=fd.get("linkedin_url") or "",
+            education=fd.get("education") or [],
+            previous_roles=fd.get("previous_roles") or [],
+            location=fd.get("location") or "",
+            phone_prefix=fd.get("phone_prefix") or "",
+            university=fd.get("university") or "",
+        )
+        # Attach company country for geo signal 4
+        founder.company_country = profile.country
+        geo_score(founder)
+        profile.founders.append(founder)
+
+    # Flag founders whose LinkedIn data is inferred, not scraped
+    uncertain_founders = []
+    for f in profile.founders:
+        if f.linkedin_url and not f.location and f.geo_score <= 1:
+            f.linkedin_uncertain = True
+            uncertain_founders.append(f.name)
+    if uncertain_founders:
+        flag = f"⚠️ LinkedIn data unverified for: {', '.join(uncertain_founders)} — geo signals based on inferred data only."
+        profile.notes = (profile.notes + "\n" + flag).strip() if profile.notes else flag
+
+    # Score thesis
+    profile.thesis = thesis_score(profile)
+
+    # Find contact (use first founder if available)
+    primary_founder = profile.founders[0] if profile.founders else None
+    profile.contact = find_contact(profile.website, primary_founder)
+
+    return profile
