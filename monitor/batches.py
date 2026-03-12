@@ -87,6 +87,69 @@ def extract_company_names(page_text: str) -> list[str]:
     return []
 
 
+def scan_tavily_queries() -> list[str]:
+    """
+    Run TAVILY_MONITOR_QUERIES via Tavily search and return raw text snippets
+    for new results. Used for JS-heavy sites (F6S, ProductHunt, Dealroom) that
+    don't render cleanly with BeautifulSoup.
+
+    Requires TAVILY_API_KEY. Silently skips if key is not set.
+    Returns a list of text snippets (same format as scan_batches output),
+    ready to pass through extract_company_names().
+    """
+    queries = config.TAVILY_MONITOR_QUERIES
+    if not queries:
+        return []
+
+    tavily_key = config.get_optional_key("TAVILY_API_KEY")
+    if not tavily_key:
+        logger.info("No TAVILY_API_KEY — skipping Tavily monitor queries.")
+        return []
+
+    import requests as _requests
+
+    TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+    snippets: list[str] = []
+
+    for query in queries:
+        logger.info(f"Tavily monitor query: {query[:60]}...")
+        try:
+            payload = {
+                "api_key": tavily_key,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": 10,
+                "include_answer": False,
+                "include_raw_content": False,
+            }
+            resp = _requests.post(
+                TAVILY_SEARCH_URL, json=payload, timeout=config.REQUEST_TIMEOUT
+            )
+            if resp.status_code == 401:
+                logger.warning("Tavily auth failed — check TAVILY_API_KEY.")
+                break
+            if resp.status_code == 429:
+                logger.warning("Tavily rate limit hit — skipping remaining queries.")
+                break
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if results:
+                combined = " ".join(
+                    f"{r.get('title', '')} {r.get('content', '')}"
+                    for r in results
+                )
+                snippets.append(combined)
+                logger.info(f"  → {len(results)} result(s) returned")
+            else:
+                logger.info("  → No results")
+        except Exception as exc:
+            logger.warning(f"Tavily query failed: {exc}")
+
+        time.sleep(config.REQUEST_DELAY)
+
+    return snippets
+
+
 def scan_batches() -> list[str]:
     """
     Scan all configured accelerator batch URLs for new company mentions.

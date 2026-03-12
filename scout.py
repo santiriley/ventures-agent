@@ -26,7 +26,7 @@ from pathlib import Path
 
 import config
 from enrichment.engine import enrich_with_claude
-from monitor.batches import scan_batches, extract_company_names
+from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
 from notion.writer import push_lead
@@ -64,10 +64,15 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     csv_rows: list[dict] = []
     failed_log = config.TMP_DIR / f"failed_leads_{run_date}.txt"
 
-    # ── Step 1: Scan accelerator batch pages ──────────────────────────────────
+    # ── Step 1: Scan accelerator batch pages + Tavily queries ─────────────────
     logger.info("Step 1 — Scanning accelerator batch pages...")
     batch_texts = scan_batches()
     logger.info(f"  {len(batch_texts)} batch page(s) with new content.")
+
+    logger.info("Step 1b — Running Tavily monitor queries (F6S, ProductHunt, Dealroom)...")
+    tavily_texts = scan_tavily_queries()
+    batch_texts.extend(tavily_texts)
+    logger.info(f"  {len(tavily_texts)} Tavily query result(s) added.")
 
     # ── Step 2: Scan portfolio networks ──────────────────────────────────────
     logger.info("Step 2 — Scanning portfolio networks...")

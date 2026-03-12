@@ -135,7 +135,7 @@ ACCELERATOR_BATCH_URLS: list[str] = [
     "https://startupchile.org/startups/",               # Start-Up Chile cohorts
 
     # ── IDB Lab & Finnovista ──
-    # "https://idblab.iadb.org/en/portfolio",           # DNS failing — verify current URL
+    "https://bidlab.org/en",                            # IDB Lab (migrated from idblab.iadb.org)
     "https://finnovista.com/en/portfolio/",
 
     # ── Google for Startups LATAM ──
@@ -144,20 +144,44 @@ ACCELERATOR_BATCH_URLS: list[str] = [
     # ── Dominican Republic ──
     "https://www.pucmm.edu.do/investigacion/incubadora",
 
-    # ── To restore / verify (were DNS-failing as of 2026-03-10) ──
-    # "https://endeavorguatemala.org/empresas/"         # Endeavor Guatemala — check if live
-    # "https://endeavorcostarica.org/empresas/"         # Endeavor Costa Rica — check if live
-    # "https://parquetec.ucr.ac.cr/emprendimiento/"     # UCR Parque Tec CR — check if live
+    # ── ParqueTec Costa Rica ──
+    "https://www.parquetec.org/en/proyectos",           # ParqueTec CR portfolio (was parquetec.ucr.ac.cr)
+
+    # ── CA/DR tech media (Tier 1 addition 2026-03-12) ──
+    "https://contxto.com/en/startups/",                 # Contxto — primary CA/DR startup media
+    "https://iupana.com",                               # iupana — fintech-focused LATAM news
+
+    # ── International accelerators with CA/DR deal flow (Tier 2 addition 2026-03-12) ──
+    "https://www.seedstars.com/companies/",             # Seedstars — emerging markets, active in CA
+    "https://vilcap.com/portfolio",                     # Village Capital — CA/DR programs
+    "https://unreasonablegroup.com/companies/",         # Unreasonable Group — LATAM cohorts
+
+    # ── Removed (no active portal confirmed as of 2026-03-10) ──
+    # "https://endeavorguatemala.org/empresas/"         # Endeavor GT — org closed regional site
+    # "https://endeavorcostarica.org/empresas/"         # Endeavor CR — org closed regional site
 ]
 
 NETWORK_PROFILE_URLS: list[str] = [
-    # Add LinkedIn or public founder network pages to monitor
-    # e.g. "https://www.linkedin.com/company/carica-vc/people/"
+    # ── Regional VC portfolios — signals fundable CA/DR companies (Tier 1 addition 2026-03-12) ──
+    "https://carao.com/portfolio",                      # Carao Ventures — CR-based seed VC
+    # Add HIVED, Wollef, SV VC portfolio URLs here once confirmed
+]
+
+# ── Tavily monitor queries — for JS-heavy sites that don't render via BeautifulSoup ──
+# Used by monitor/batches.py:scan_tavily_queries() during the weekly run.
+# Results are passed through Claude (fast model) for company name extraction, same as batch pages.
+TAVILY_MONITOR_QUERIES: list[str] = [
+    # F6S — startups self-list when applying to accelerators
+    "site:f6s.com startup Costa Rica OR Guatemala OR Honduras OR \"El Salvador\" OR Panama OR Nicaragua OR \"Dominican Republic\"",
+    # ProductHunt — LATAM founders launch here
+    "site:producthunt.com startup founder \"Costa Rica\" OR \"Guatemala\" OR \"Honduras\" OR \"El Salvador\" OR \"Panama\" OR \"Dominican Republic\"",
+    # Dealroom — better LATAM early-stage data than Crunchbase
+    "site:dealroom.co startup \"Central America\" OR \"Costa Rica\" OR \"Guatemala\" OR \"Dominican Republic\" seed OR \"pre-seed\"",
 ]
 
 EVENT_CALENDAR_URLS: list[str] = [
     # ── Regional startup event calendars ──
-    "https://idblab.iadb.org/en/events",
+    "https://events.iadb.org/",                         # IDB Lab events (migrated from idblab.iadb.org)
     "https://www.campusverde.cr/eventos/",
     # Note: Meetup/Eventbrite pages are JS-rendered and may not scrape cleanly
 ]

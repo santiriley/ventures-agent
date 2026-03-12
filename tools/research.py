@@ -103,6 +103,28 @@ def _research_with_tavily(company_name: str, website: str | None, api_key: str) 
         if extracted:
             sections.append(f"=== Website Content ({website}) ===\n{extracted[:3000]}")
 
+    # Search 3: LinkedIn founder/company profiles
+    linkedin_results = _tavily_search(
+        f"{company_name} founders site:linkedin.com", api_key
+    )
+    if linkedin_results:
+        snippets = [
+            f"[{r.get('title', '')}] {r.get('content', '')}"
+            for r in linkedin_results[:2]
+        ]
+        sections.append("=== LinkedIn Signals ===\n" + "\n\n".join(snippets))
+
+    # Search 4: GitHub — confirms tech foundation and founder activity
+    github_results = _tavily_search(
+        f"{company_name} founders site:github.com", api_key
+    )
+    if github_results:
+        snippets = [
+            f"[{r.get('title', '')}] {r.get('content', '')}"
+            for r in github_results[:2]
+        ]
+        sections.append("=== GitHub Signals ===\n" + "\n\n".join(snippets))
+
     return "\n\n".join(sections)
 
 
