@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 import config
+from tools.notify import send_run_summary
 from enrichment.engine import enrich_with_claude
 from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names
 from monitor.network import scan_network
@@ -142,7 +143,7 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
         except EnvironmentError as exc:
             # Auth failure — stop immediately
             logger.error(f"  ❌ Auth error — stopping run: {exc}")
-            _print_summary(stats, run_date)
+            _print_summary(stats, run_date, failed=True)
             sys.exit(1)
         except Exception as exc:
             stats["failed"] += 1
@@ -169,7 +170,7 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     _print_summary(stats, run_date)
 
 
-def _print_summary(stats: dict, run_date: str) -> None:
+def _print_summary(stats: dict, run_date: str, failed: bool = False) -> None:
     logger.info("")
     logger.info("=" * 40)
     logger.info(f"Weekly Monitor — Run Summary ({run_date})")
@@ -182,6 +183,11 @@ def _print_summary(stats: dict, run_date: str) -> None:
     logger.info(f"  Failed:             {stats['failed']}")
     logger.info("=" * 40)
     logger.info("")
+
+    try:
+        send_run_summary(stats, run_date, failed=failed)
+    except Exception as exc:
+        logger.warning(f"  ⚠️  Email notification failed (run not affected): {exc}")
 
 
 if __name__ == "__main__":

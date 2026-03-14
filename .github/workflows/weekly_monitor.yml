@@ -24,6 +24,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run weekly monitor
+        continue-on-error: false
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
@@ -31,6 +32,10 @@ jobs:
           NOTION_DB_EVENTS: ${{ secrets.NOTION_DB_EVENTS }}
           HUNTER_API_KEY: ${{ secrets.HUNTER_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          NOTIFY_EMAIL_ENABLED: ${{ secrets.NOTIFY_EMAIL_ENABLED }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python scout.py
 
       - name: Upload logs on failure
@@ -42,3 +47,24 @@ jobs:
             scout.log
             .tmp/failed_leads_*.txt
           retention-days: 14
+
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Carica Scout weekly run failed — ${date}`,
+              body: [
+                '## Weekly monitor run failed',
+                '',
+                `**Date:** ${date}`,
+                `**Run:** ${runUrl}`,
+                '',
+                'Check the Actions logs and any uploaded artifacts for details.',
+              ].join('\n'),
+            });

@@ -1,6 +1,6 @@
 # Agent Instructions
 # Carica Scout · Carica VC Deal Sourcing Agent
-# Last updated: 2026-03-10
+# Last updated: 2026-03-13
 # Code version: v1.1 (Tavily, outreach, briefing, bug-fixes)
 
 You're working inside the **WAT framework** (Workflows, Agents, Tools). This architecture separates concerns so that probabilistic AI handles reasoning while deterministic code handles execution. That separation is what makes this system reliable.
@@ -132,8 +132,9 @@ All workflow SOPs live in `workflows/`. Always read the relevant workflow before
 
 ### Workflow B — Weekly Monitor
 **File:** `workflows/weekly_monitor.md`
-**Trigger:** Every Monday 7:00am Costa Rica time (GitHub Actions cron)
-**Sequence:** Load caches → `monitor/batches.py` → `monitor/network.py` → Claude filters mentions → enrich each candidate → push to Notion → `monitor/events.py` → save caches + CSV backup → log summary
+**Trigger:** Every Monday 7:00am Costa Rica time (GitHub Actions cron); GitHub creates an issue automatically on job failure
+**Sequence:** Load caches → `monitor/batches.py:scan_batches()` (scrape accelerator pages) → `monitor/batches.py:scan_tavily_queries()` (Tavily queries for JS-heavy sites: F6S, ProductHunt, Dealroom) → `monitor/network.py:scan_network()` → Claude extracts company names → enrich each candidate → push to Notion → `monitor/events.py` → save caches + CSV backup → email summary (if enabled)
+**Run stats tracked:** `mentions_found` · `candidates` · `added` · `skipped_duplicate` · `skipped_portfolio` · `failed`
 **Output:** New leads in Notion + updated caches + `weekly_leads.csv`
 
 ### Workflow C — Inbound Triage
@@ -163,9 +164,19 @@ All workflow SOPs live in `workflows/`. Always read the relevant workflow before
 ANTHROPIC_API_KEY       # console.anthropic.com → API Keys
 NOTION_API_KEY          # notion.so/my-integrations
 NOTION_DB_LEADS         # From Notion URL: notion.so/{THIS_PART}?v=...
-NOTION_DB_EVENTS        # Second database for events (optional)
-HUNTER_API_KEY          # hunter.io → free tier (optional)
-TAVILY_API_KEY          # app.tavily.com → free tier (optional, highly recommended)
+```
+
+**Optional `.env` keys:**
+```
+NOTION_DB_EVENTS        # Second database for events
+HUNTER_API_KEY          # hunter.io → free tier (contact verification)
+TAVILY_API_KEY          # app.tavily.com → free tier (highly recommended; enables JS-heavy site monitoring)
+
+# Email notifications — tools/notify.py (all four required if enabled)
+NOTIFY_EMAIL_ENABLED    # Set to "true" to enable post-run email summaries
+NOTIFY_EMAIL_TO         # Recipient address
+NOTIFY_EMAIL_FROM       # Gmail sender address
+GMAIL_APP_PASSWORD      # Gmail app password (NOT account password; requires 2FA enabled)
 ```
 
 **When a key is missing, always print:**
@@ -222,7 +233,7 @@ Never attempt to proceed without a required key. Stop immediately and report.
 **Always:**
 - Include a written rationale sentence with every thesis score
 - Flag clearly when only generic emails are available
-- Save a CSV backup on every weekly run
+- Save a CSV backup on every run (weekly and on-demand/batch modes alike)
 - Log the full run summary at the end of every run (mentions / candidates / added / skipped / failed)
 - Add a notes field when something unusual is found about a company
 
@@ -244,18 +255,35 @@ Never attempt to proceed without a required key. Stop immediately and report.
 .tmp/               # Temporary files (scraped data, failed leads, debug logs).
                     # Regenerated as needed. Safe to delete. Never commit.
 tools/              # Python scripts for deterministic execution
+  research.py       #   Web research — Tavily primary, BeautifulSoup fallback
+  outreach.py       #   First-touch email DRAFT generator (analyst must review before sending)
+  briefing.py       #   Pre-meeting analyst brief generator
+  notify.py         #   Optional post-run email summaries via Gmail SMTP
+  retry.py          #   Exponential backoff decorator for flaky network calls
+  github.py         #   GitHub public API lookup (implemented; not yet wired into pipeline)
 workflows/          # Markdown SOPs defining what to do and how
 .env                # API keys and environment variables (NEVER store secrets anywhere else)
+.env.example        # Template — copy to .env and fill in values
 .gitignore          # Must include: .env, .tmp/, *.log, *.csv
+NOTION_SETUP.md     # Step-by-step Notion database setup guide
 
 enrichment/         # Core enrichment engine (geo, contact, thesis scoring)
+  engine.py         #   enrich_with_claude() · geo_score() · thesis_score() · find_contact()
 monitor/            # Monitoring scripts (batches, network, events)
+  batches.py        #   scan_batches() + scan_tavily_queries() + extract_company_names()
+  network.py        #   Portfolio founder network scanner
+  events.py         #   Event calendar scanner + Notion push
 notion/             # Notion API writer with deduplication
-interface/          # Browser-based on-demand UI
+  writer.py         #   push_lead() · _normalize_name() · _search_existing()
+interface/          # Browser-based on-demand UI (planned — not yet implemented)
 config.py           # All tunable settings (not secrets)
 scout.py            # Weekly run orchestrator
 enrich.py           # On-demand CLI tool (primary daily use)
 ```
+
+**Model selection (defined in `config.py`):**
+- `CLAUDE_MODEL = "claude-opus-4-6"` — enrichment, briefings (quality-sensitive tasks)
+- `CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001"` — batch filtering, name extraction, outreach drafts (speed/cost-sensitive tasks)
 
 **Core principle:** Local files are just for processing. Anything the analyst needs to see or use lives in Notion (the cloud service). Everything in `.tmp/` is disposable.
 

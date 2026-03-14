@@ -208,3 +208,12 @@ TAVILY_MAX_RESULTS = 5
 
 # ── Weekly monitor schedule ────────────────────────────────────────────────
 MONITOR_CRON = "0 13 * * 1"   # Every Monday 07:00 Costa Rica (UTC-6) = 13:00 UTC
+
+# ── Email notifications (optional) ────────────────────────────────────────
+# Set NOTIFY_EMAIL_ENABLED=true in .env to activate post-run summaries.
+# GMAIL_APP_PASSWORD is NOT your Google account password — generate one at:
+# myaccount.google.com/apppasswords  (requires 2FA to be enabled)
+NOTIFY_EMAIL_ENABLED: bool = os.environ.get("NOTIFY_EMAIL_ENABLED", "").strip().lower() == "true"
+NOTIFY_EMAIL_TO: str | None = os.environ.get("NOTIFY_EMAIL_TO", "").strip() or None
+NOTIFY_EMAIL_FROM: str | None = os.environ.get("NOTIFY_EMAIL_FROM", "").strip() or None
+GMAIL_APP_PASSWORD: str | None = os.environ.get("GMAIL_APP_PASSWORD", "").strip() or None
