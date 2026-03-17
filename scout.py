@@ -5,15 +5,17 @@ Runs automatically every Monday 7:00am Costa Rica time via GitHub Actions.
 Can also be triggered manually: python scout.py
 
 Sequence:
-  1. Load caches
+  1. Load caches + calibration
   2. monitor/batches.py  → scan accelerator batch pages
   3. monitor/network.py  → scan portfolio networks
   4. Claude filters mentions
-  5. Enrich each candidate
-  6. Push to Notion
-  7. monitor/events.py   → scan event calendars
-  8. Save caches + CSV backup
-  9. Log run summary
+  5. Geo pre-screen (no API cost — skips non-CA/DR before enrichment)
+  6. Enrich each candidate
+  7. Push to Notion
+  8. monitor/events.py   → scan event calendars
+  9. Save caches + CSV backup
+ 10. Log run summary
+ 11. Auto-apply safe calibration updates (size/stage false positives)
 """
 
 from __future__ import annotations
@@ -21,13 +23,14 @@ from __future__ import annotations
 import csv
 import datetime
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
 import config
 from tools.notify import send_run_summary
-from enrichment.engine import enrich_with_claude
-from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names
+from enrichment.engine import enrich_with_claude, load_calibration
+from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names, geo_prescreen
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
 from notion.writer import push_lead
@@ -53,9 +56,14 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     if dry_run:
         logger.info("=== DRY RUN — Notion pushes disabled ===")
 
+    # ── Load calibration ──────────────────────────────────────────────────────
+    calibration = load_calibration()
+
     stats = {
         "mentions_found": 0,
         "candidates": 0,
+        "skipped_no_geo": 0,
+        "skipped_false_positive": 0,
         "added": 0,
         "skipped_duplicate": 0,
         "skipped_portfolio": 0,
@@ -67,50 +75,88 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
 
     # ── Step 1: Scan accelerator batch pages + Tavily queries ─────────────────
     logger.info("Step 1 — Scanning accelerator batch pages...")
-    batch_texts = scan_batches()
-    logger.info(f"  {len(batch_texts)} batch page(s) with new content.")
+    batch_items = scan_batches()  # list[tuple[str, str]] (text, source_tag)
+    logger.info(f"  {len(batch_items)} batch page(s) with new content.")
 
     logger.info("Step 1b — Running Tavily monitor queries (F6S, ProductHunt, Dealroom)...")
-    tavily_texts = scan_tavily_queries()
-    batch_texts.extend(tavily_texts)
-    logger.info(f"  {len(tavily_texts)} Tavily query result(s) added.")
+    tavily_items = scan_tavily_queries(
+        query_refinements=calibration.get("query_refinements")
+    )  # list[tuple[str, str]] (text, source_tag)
+    logger.info(f"  {len(tavily_items)} Tavily query result(s) added.")
+
+    all_items = batch_items + tavily_items
 
     # ── Step 2: Scan portfolio networks ──────────────────────────────────────
     logger.info("Step 2 — Scanning portfolio networks...")
     network_mentions = scan_network()
     logger.info(f"  {len(network_mentions)} mention(s) from network scan.")
 
-    # Combine: extract individual company names from batch pages; network mentions carry name+snippet
-    candidates: list[str] = []
+    # ── Step 3: Extract names + geo pre-screen ────────────────────────────────
+    candidates: list[tuple[str, str]] = []  # (raw_input, source_tag)
     seen_names: set[str] = set()
 
     logger.info("  Extracting company names from batch pages...")
-    for text in batch_texts:
-        names = extract_company_names(text)
-        logger.info(f"    → {len(names)} companies extracted")
-        for name in names:
+    for text, source_tag in all_items:
+        name_snippets = extract_company_names(text)  # list[tuple[str, str]]
+        logger.info(f"    → {len(name_snippets)} companies extracted from {source_tag}")
+        for name, snippet in name_snippets:
             norm = name.lower().strip()
-            if norm and norm not in seen_names:
-                seen_names.add(norm)
-                candidates.append(name)
+            if not norm or norm in seen_names:
+                continue
+            seen_names.add(norm)
 
+            if not geo_prescreen(name, snippet):
+                stats["skipped_no_geo"] += 1
+                logger.info(f"    ⏭  {name} — no CA/DR geo signal in source")
+                continue
+
+            candidates.append((name, source_tag))
+
+    # Network mentions carry their own context — use full snippet for geo screen
     for mention in network_mentions:
-        raw = mention.get("snippet") or mention.get("name") or ""
-        if raw:
-            candidates.append(raw)
+        name = mention.get("name", "")
+        snippet = mention.get("snippet", "")
+        raw = snippet or name
+        if not raw:
+            continue
+        norm = name.lower().strip() if name else raw.lower()[:40]
+        if norm in seen_names:
+            continue
+        seen_names.add(norm)
+        network_tag = config.NETWORK_URL_TAGS.get(
+            "https://carao.com/portfolio", "network:carao"
+        )
+        candidates.append((raw, network_tag))
 
-    stats["mentions_found"] = len(candidates)
+    stats["mentions_found"] = len(candidates) + stats["skipped_no_geo"]
     stats["candidates"] = len(candidates)
 
+    logger.info(f"  {stats['skipped_no_geo']} candidate(s) skipped (no CA/DR geo signal)")
     logger.info(f"Total candidates to enrich: {len(candidates)}")
 
-    # ── Step 3: Enrich each candidate ────────────────────────────────────────
-    logger.info("Step 3 — Enriching candidates...")
+    # ── Step 4: Enrich each candidate ────────────────────────────────────────
+    logger.info("Step 4 — Enriching candidates...")
+    false_positives = set(calibration.get("false_positives", []))
 
-    for i, raw in enumerate(candidates, 1):
+    for i, (raw, source_tag) in enumerate(candidates, 1):
         logger.info(f"  [{i}/{len(candidates)}] Enriching: {raw[:60]}...")
+
+        # False positive check (before any API spend)
+        fp_key = raw.strip().lower().split("\n")[0][:80]
+        for suffix in config.LEGAL_SUFFIXES:
+            if fp_key.endswith(suffix):
+                fp_key = fp_key[:-len(suffix)].strip()
+        if fp_key in false_positives:
+            stats["skipped_false_positive"] += 1
+            logger.info(f"    ⏭  Known false positive: {raw[:60]}")
+            continue
+
         try:
-            profile = enrich_with_claude(raw, source="weekly_monitor")
+            profile = enrich_with_claude(
+                raw,
+                source=f"weekly_monitor:{source_tag}",
+                calibration=calibration,
+            )
             profile.date_found = run_date
 
             result = "skipped_dry_run" if dry_run else push_lead(profile)
@@ -128,7 +174,7 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
                     "contact_email": profile.contact.email if profile.contact else "",
                     "contact_confidence": profile.contact.confidence if profile.contact else "",
                     "date": run_date,
-                    "source": "weekly_monitor",
+                    "source": f"weekly_monitor:{source_tag}",
                 })
             elif result == "duplicate":
                 stats["skipped_duplicate"] += 1
@@ -151,13 +197,13 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             with open(failed_log, "a") as f:
                 f.write(f"{raw[:200]}\n")
 
-    # ── Step 4: Scan events ───────────────────────────────────────────────────
-    logger.info("Step 4 — Scanning event calendars...")
+    # ── Step 5: Scan events ───────────────────────────────────────────────────
+    logger.info("Step 5 — Scanning event calendars...")
     events = scan_events()
     events_pushed = push_events_to_notion(events)
     logger.info(f"  {events_pushed} event(s) pushed to Notion.")
 
-    # ── Step 5: CSV backup ────────────────────────────────────────────────────
+    # ── Step 6: CSV backup ────────────────────────────────────────────────────
     csv_path = config.TMP_DIR / f"weekly_leads_{run_date}.csv"
     if csv_rows:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -166,8 +212,28 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             writer.writerows(csv_rows)
         logger.info(f"  💾 CSV backup saved: {csv_path}")
 
-    # ── Step 6: Summary ───────────────────────────────────────────────────────
+    # ── Step 7: Summary ───────────────────────────────────────────────────────
     _print_summary(stats, run_date)
+
+    # ── Step 8: Auto-apply calibration (safe changes only) ───────────────────
+    if not dry_run:
+        logger.info("Step 8 — Auto-applying calibration updates (size/stage false positives)...")
+        try:
+            result = subprocess.run(
+                [sys.executable, str(config.ROOT / "feedback.py"), "--auto-apply"],
+                capture_output=True,
+                text=True,
+                cwd=str(config.ROOT),
+            )
+            if result.stdout:
+                for line in result.stdout.strip().splitlines():
+                    logger.info(f"  {line}")
+            if result.returncode != 0 and result.stderr:
+                logger.warning(f"  feedback.py --auto-apply warning: {result.stderr.strip()[:200]}")
+        except FileNotFoundError:
+            logger.info("  feedback.py not found — skipping calibration auto-apply.")
+        except Exception as exc:
+            logger.warning(f"  Calibration auto-apply skipped: {exc}")
 
 
 def _print_summary(stats: dict, run_date: str, failed: bool = False) -> None:
@@ -176,6 +242,8 @@ def _print_summary(stats: dict, run_date: str, failed: bool = False) -> None:
     logger.info(f"Weekly Monitor — Run Summary ({run_date})")
     logger.info("=" * 40)
     logger.info(f"  Mentions found:     {stats['mentions_found']}")
+    logger.info(f"  Skipped (no geo):   {stats.get('skipped_no_geo', 0)}")
+    logger.info(f"  Skipped (false pos):{stats.get('skipped_false_positive', 0)}")
     logger.info(f"  Candidates:         {stats['candidates']}")
     logger.info(f"  Added to Notion:    {stats['added']}")
     logger.info(f"  Skipped (dup):      {stats['skipped_duplicate']}")

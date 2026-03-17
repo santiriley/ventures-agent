@@ -123,6 +123,38 @@ DEAL_STAGES = [
 # server-side HTML will yield empty results. Tavily (tools/research.py)
 # is the more reliable path for research. Verify each URL works before
 # adding to production.
+# Source tags — short identifiers used in Notion Source field for quality tracking
+# Maps each URL to a slug; used by monitor/batches.py when tagging discovered leads.
+BATCH_URL_TAGS: dict[str, str] = {
+    "https://www.ycombinator.com/companies?batch=&regions=Latin+America": "yc",
+    "https://500.co/thefund": "500-global",
+    "https://www.nxtp.vc/portfolio": "nxtp",
+    "https://lavca.org/industry-data/vc-deal-data/": "lavca",
+    "https://endeavor.org/network/companies/": "endeavor",
+    "https://startupchile.org/startups/": "startup-chile",
+    "https://bidlab.org/en": "idb-lab",
+    "https://finnovista.com/en/portfolio/": "finnovista",
+    "https://startup.google.com/accelerator/latin-america/": "google-startups",
+    "https://www.pucmm.edu.do/investigacion/incubadora": "pucmm",
+    "https://www.parquetec.org/en/proyectos": "parquetec",
+    "https://contxto.com/en/startups/": "contxto",
+    "https://iupana.com": "iupana",
+    "https://www.seedstars.com/companies/": "seedstars",
+    "https://vilcap.com/portfolio": "vilcap",
+    "https://unreasonablegroup.com/companies/": "unreasonable",
+}
+
+NETWORK_URL_TAGS: dict[str, str] = {
+    "https://carao.com/portfolio": "network:carao",
+}
+
+# Tavily query tags — same order as TAVILY_MONITOR_QUERIES below
+TAVILY_QUERY_TAGS: list[str] = [
+    "tavily:f6s",
+    "tavily:producthunt",
+    "tavily:dealroom",
+]
+
 ACCELERATOR_BATCH_URLS: list[str] = [
     # ── Global programs with strong LATAM presence ──
     "https://www.ycombinator.com/companies?batch=&regions=Latin+America",

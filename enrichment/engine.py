@@ -72,6 +72,125 @@ class CompanyProfile:
     raw_input: str = ""
 
 
+# ── Calibration loader ──────────────────────────────────────────────────────
+
+def normalize_for_fp(name: str) -> str:
+    """Normalize a company name for false positive matching (lowercase + strip legal suffixes)."""
+    n = name.lower().strip()
+    for suffix in config.LEGAL_SUFFIXES:
+        if n.endswith(suffix):
+            n = n[:-len(suffix)].strip()
+    return n
+
+
+def load_calibration(path: str = "CALIBRATION.md") -> dict:
+    """
+    Parse CALIBRATION.md into a structured dict.
+    Warns but does not crash if the file is missing.
+    """
+    result: dict = {
+        "false_positives": [],
+        "founding_year_threshold": 2019,
+        "raise_threshold_usd": 5_000_000,
+        "sector_adjustments": [],
+        "query_refinements": {},
+        "meta": {},
+    }
+
+    cal_path = config.ROOT / path
+    if not cal_path.exists():
+        logger.warning(
+            "⚠️  CALIBRATION.md not found — running without calibration. "
+            "Run `python feedback.py` to generate."
+        )
+        return result
+
+    text = cal_path.read_text(encoding="utf-8")
+
+    def extract_section(section_name: str) -> str:
+        pattern = (
+            rf"<!--\s*feedback\.py:{re.escape(section_name)}:start\s*-->"
+            rf"(.*?)"
+            rf"<!--\s*feedback\.py:{re.escape(section_name)}:end\s*-->"
+        )
+        m = re.search(pattern, text, re.DOTALL)
+        return m.group(1).strip() if m else ""
+
+    # False positives
+    fp_block = extract_section("false_positives")
+    fps = []
+    for line in fp_block.splitlines():
+        line = line.strip()
+        if line.startswith("- "):
+            fps.append(normalize_for_fp(line[2:].strip()))
+    result["false_positives"] = fps
+
+    # Founding year threshold
+    year_block = extract_section("founding_year")
+    m = re.search(r"\d{4}", year_block)
+    if m:
+        result["founding_year_threshold"] = int(m.group(0))
+
+    # Raise threshold
+    raise_block = extract_section("raise_threshold")
+    m = re.search(r"\$?([\d,]+)\s*(M|K)?", raise_block)
+    if m:
+        val = int(m.group(1).replace(",", ""))
+        mult = (m.group(2) or "").upper()
+        if mult == "M":
+            val *= 1_000_000
+        elif mult == "K":
+            val *= 1_000
+        result["raise_threshold_usd"] = val
+
+    # Sector adjustments — format: "- Sector | geo_filter | delta | condition | reason"
+    adj_block = extract_section("sector_adjustments")
+    adjustments = []
+    for line in adj_block.splitlines():
+        line = line.strip()
+        if line.startswith("- ") and "|" in line:
+            parts = [p.strip() for p in line[2:].split("|")]
+            if len(parts) >= 4:
+                try:
+                    adjustments.append({
+                        "sector": parts[0].lower(),
+                        "geo_filter": parts[1].lower(),
+                        "delta": int(parts[2]),
+                        "condition": parts[3].lower(),
+                        "reason": parts[4] if len(parts) > 4 else "",
+                    })
+                except (ValueError, IndexError):
+                    pass
+    result["sector_adjustments"] = adjustments
+
+    # Query refinements — format: '- tag: add terms "terms" — reason'
+    qr_block = extract_section("query_refinements")
+    refinements: dict[str, str] = {}
+    for line in qr_block.splitlines():
+        line = line.strip()
+        if line.startswith("- ") and ":" in line:
+            tag_part, _, rest = line[2:].partition(":")
+            tag = tag_part.strip()
+            terms_match = re.search(r'"([^"]+)"', rest)
+            if terms_match:
+                refinements[tag] = terms_match.group(1)
+    result["query_refinements"] = refinements
+
+    # Log summary
+    fp_count = len(result["false_positives"])
+    adj_count = len(result["sector_adjustments"])
+    qr_count = len(result["query_refinements"])
+    year = result["founding_year_threshold"]
+    logger.info(
+        f"Calibration loaded: {fp_count} false positive(s) | "
+        f"{adj_count} sector adjustment(s) | "
+        f"{qr_count} query refinement(s) | "
+        f"founding year ≥ {year}"
+    )
+
+    return result
+
+
 # ── GeoScore ────────────────────────────────────────────────────────────────
 
 def geo_score(founder: Founder) -> Founder:
@@ -122,10 +241,13 @@ def geo_score(founder: Founder) -> Founder:
 
 # ── ThesisScore ─────────────────────────────────────────────────────────────
 
-def thesis_score(profile: CompanyProfile) -> ThesisResult:
+def thesis_score(profile: CompanyProfile, calibration: dict | None = None) -> ThesisResult:
     """
     Score a CompanyProfile against the Carica VC investment thesis.
     Returns a ThesisResult with score (1-5), stars label, and written rationale.
+
+    calibration: optional dict from load_calibration(). If provided, sector adjustments
+    are applied as deterministic post-processing after the base score is computed.
     """
     has_tech = bool(profile.sector)  # sector populated = tech confirmed by Claude
     has_mvp = profile.stage.lower() not in ("idea", "pre-mvp", "")
@@ -164,8 +286,39 @@ def thesis_score(profile: CompanyProfile) -> ThesisResult:
     else:
         score, rationale = 1, "Insufficient signals for thesis match; flagged for manual analyst review."
 
+    # ── Post-processing: apply sector adjustments from calibration ────────────
+    if calibration:
+        for adj in calibration.get("sector_adjustments", []):
+            if _matches_sector_adjustment(profile, adj, best_geo):
+                adjusted = max(1, min(5, score + adj["delta"]))
+                reason = adj.get("reason", "calibration adjustment")
+                rationale += f" [Calibration: {reason}]"
+                score = adjusted
+                break  # apply at most one adjustment
+
     stars = config.THESIS_SCORE_LABELS.get(score, "")
     return ThesisResult(score=score, stars=stars, rationale=rationale)
+
+
+def _matches_sector_adjustment(profile: CompanyProfile, adj: dict, best_geo: int) -> bool:
+    """Return True if this calibration sector adjustment applies to the given profile."""
+    sector = (profile.sector or "").lower()
+    geo_filter = adj.get("geo_filter", "").lower()
+    condition = adj.get("condition", "").lower()
+
+    # Sector must be present in profile sector string
+    if adj.get("sector", "") not in sector:
+        return False
+
+    # "outside-ca-dr" filter: only apply when geo_score < 2
+    if geo_filter == "outside-ca-dr" and best_geo >= 2:
+        return False
+
+    # Explicit condition check
+    if "geo_score < 2" in condition and best_geo >= 2:
+        return False
+
+    return True
 
 
 # ── FindContact ─────────────────────────────────────────────────────────────
@@ -315,10 +468,17 @@ Rules:
 """
 
 
-def enrich_with_claude(raw_input: str, source: str = "manual") -> CompanyProfile:
+def enrich_with_claude(
+    raw_input: str,
+    source: str = "manual",
+    calibration: dict | None = None,
+) -> CompanyProfile:
     """
     Use Claude to extract a structured CompanyProfile from raw input.
     raw_input can be: company name, URL, pasted text, email, WhatsApp message, etc.
+
+    calibration: optional dict from load_calibration(). If provided, calibration context
+    is injected into the Claude extraction prompt and sector adjustments are applied post-scoring.
 
     If TAVILY_API_KEY is set (or a website can be inferred), web research is
     fetched first and appended to raw_input to give Claude richer context.
@@ -342,12 +502,33 @@ def enrich_with_claude(raw_input: str, source: str = "manual") -> CompanyProfile
             f"{research_context}"
         )
 
+    # ── Build system prompt with calibration context ──────────────────────────
+    system_prompt = ENRICH_SYSTEM_PROMPT
+    if calibration:
+        fp_list = calibration.get("false_positives", [])
+        year = calibration.get("founding_year_threshold", 2019)
+        amount = calibration.get("raise_threshold_usd", 5_000_000)
+        amount_str = f"${amount // 1_000_000}M" if amount >= 1_000_000 else f"${amount:,}"
+        fp_display = ", ".join(fp_list[:20]) if fp_list else "none"
+
+        cal_context = (
+            f"\n\n## Calibration Context (learned from past analyst decisions)\n"
+            f"Known false positives — add to notes field if matched: {fp_display}\n"
+            f"Caution: flag companies founded before {year} in the notes field.\n"
+            f"Caution: flag leads with total known funding > {amount_str} in the notes field.\n\n"
+            f"Extraction priorities:\n"
+            f"- Check all 4 geo signals for every founder explicitly\n"
+            f"- Do not infer early-stage from news about large funding rounds\n"
+            f"- Always note founding year and total known funding in notes if found\n"
+        )
+        system_prompt = ENRICH_SYSTEM_PROMPT + cal_context
+
     client = anthropic.Anthropic(api_key=config.get_key("ANTHROPIC_API_KEY"))
 
     message = client.messages.create(
         model=config.CLAUDE_MODEL,
         max_tokens=2048,
-        system=ENRICH_SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[{"role": "user", "content": enriched_input}],
     )
 
@@ -407,8 +588,8 @@ def enrich_with_claude(raw_input: str, source: str = "manual") -> CompanyProfile
         flag = f"⚠️ LinkedIn data unverified for: {', '.join(uncertain_founders)} — geo signals based on inferred data only."
         profile.notes = (profile.notes + "\n" + flag).strip() if profile.notes else flag
 
-    # Score thesis
-    profile.thesis = thesis_score(profile)
+    # Score thesis (pass calibration so sector adjustments are applied)
+    profile.thesis = thesis_score(profile, calibration=calibration)
 
     # Find contact (use first founder if available)
     primary_founder = profile.founders[0] if profile.founders else None

@@ -19,8 +19,15 @@ import sys
 from pathlib import Path
 
 import config
-from enrichment.engine import enrich_with_claude, CompanyProfile
+from enrichment.engine import enrich_with_claude, load_calibration, normalize_for_fp, CompanyProfile
 from notion.writer import push_lead
+
+# ── Load calibration at startup ───────────────────────────────────────────────
+_CALIBRATION: dict = {}
+
+def _init_calibration() -> None:
+    global _CALIBRATION
+    _CALIBRATION = load_calibration()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,11 +86,17 @@ def run_single(
     """
     Enrich a single input, print results, optionally push to Notion.
     Returns (profile, push_result) where push_result is one of:
-      "created" | "duplicate" | "portfolio" | "skipped" (--no-push)
+      "created" | "duplicate" | "portfolio" | "skipped" | "skipped_false_positive"
     """
+    # False positive check (no API spend)
+    fp_key = normalize_for_fp(raw_input.strip().split("\n")[0][:80])
+    if fp_key in _CALIBRATION.get("false_positives", []):
+        print(f"\n⏭  Skipped: known false positive ({raw_input[:60].strip()})")
+        return CompanyProfile(name=raw_input[:60].strip(), source=source), "skipped_false_positive"
+
     print(f"\n🔍  Enriching: {raw_input[:80]}...")
 
-    profile = enrich_with_claude(raw_input, source=source)
+    profile = enrich_with_claude(raw_input, source=source, calibration=_CALIBRATION)
     profile.date_found = datetime.date.today().isoformat()
 
     print_profile(profile)
@@ -205,6 +218,8 @@ def run_batch(filepath: str, no_push: bool = False) -> None:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    _init_calibration()
+
     parser = argparse.ArgumentParser(
         description="Carica Scout — on-demand lead enrichment",
         formatter_class=argparse.RawDescriptionHelpFormatter,
