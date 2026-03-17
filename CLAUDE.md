@@ -45,6 +45,12 @@ When you hit an error:
 **3. Keep workflows current**
 Workflows should evolve as you learn. When you find better methods, discover constraints, or encounter recurring issues, update the workflow. That said, **don't create or overwrite workflows without asking unless I explicitly tell you to.** These are your instructions and need to be preserved and refined, not tossed after one use.
 
+**4. Verify before reporting done**
+- Never print "✅ pushed to Notion" without confirming the page was actually created
+- After push: call `_search_existing()` to confirm the record exists
+- If enrichment returns sparse data (<3 fields populated), flag it — don't push silently
+- Ask yourself: "Would the analyst find this useful, or is it noise?"
+
 ---
 
 ## The Self-Improvement Loop
