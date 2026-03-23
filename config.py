@@ -25,6 +25,7 @@ REQUIRED_KEYS = {
 
 OPTIONAL_KEYS = {
     "NOTION_DB_EVENTS": "Second Notion database for events",
+    "NOTION_DB_MARKET_INTEL": "Notion database for disruption intelligence memos (optional, no fallback)",
     "HUNTER_API_KEY": "hunter.io → free tier",
     "TAVILY_API_KEY": "app.tavily.com → API Keys (free tier available)",
 }
@@ -51,6 +52,7 @@ def get_optional_key(name: str) -> str | None:
 # ── Claude model ───────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-opus-4-6"               # primary enrichment model
 CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001" # cheap pass for filtering/outreach
+CLAUDE_MODEL_RESEARCH = "claude-sonnet-4-6"    # trend synthesis, disruption memos (1×/week)
 
 # ── Fund thesis ────────────────────────────────────────────────────────────
 FUND_NAME = "Carica VC"
@@ -79,6 +81,8 @@ CA_DR_COUNTRY_NAMES = set(TARGET_COUNTRIES.keys()) | {
 CA_DR_UNIVERSITIES = {
     "INCAE", "UCR", "TEC", "ULACIT", "UFM", "UVG", "URL",
     "UNITEC", "UCA", "UTP", "INTEC", "PUCMM", "UASD",
+    # DR additions (Phase 3b): UNPHU and UNIBE both have engineering/tech faculties
+    "UNPHU", "UNIBE",
 }
 
 PORTFOLIO_COMPANIES = {
@@ -257,6 +261,65 @@ TAVILY_MONITOR_QUERIES: list[str] = [
 # NOTE: Operator-heavy queries (site:, OR chains, negative terms) degrade Tavily's semantic
 # search quality. Keep these short. Late-stage results are filtered post-retrieval by
 # stage_prescreen() in monitor/batches.py before they reach Claude for name extraction.
+
+# ── Portfolio-derived queries (Phase 3a) ───────────────────────────────────
+# Sectors directly represented in the Carica portfolio. These mirror active
+# investments: fintech (ONVO, Zunify, Ábaco, O$MO), commerce SaaS (Avify,
+# Socialdesk), logistics (Boxful), regtech (Snap Compliance).
+PORTFOLIO_DERIVED_QUERIES: list[str] = [
+    "fintech payments startup Costa Rica Guatemala Honduras El Salvador Panama Dominican Republic seed pre-seed 2025 2026",
+    "payments acceptance startup Central America Dominican Republic founder seed 2025",
+    "commerce omnichannel SaaS startup Central America Dominican Republic 2025 2026",
+    "logistics last-mile startup Costa Rica Panama Guatemala seed 2025 2026",
+    "regtech compliance GRC startup Latin America seed pre-seed 2025 2026",
+]
+PORTFOLIO_DERIVED_TAGS: list[str] = [
+    "tavily:port-fintech",
+    "tavily:port-payments",
+    "tavily:port-commerce",
+    "tavily:port-logistics",
+    "tavily:port-regtech",
+]
+
+# ── Thesis-adjacent queries (Phase 3a) ────────────────────────────────────
+# Sectors NOT yet in portfolio but within fund thesis. Expansion bets —
+# treat results as lower confidence than portfolio-derived queries.
+THESIS_ADJACENT_QUERIES: list[str] = [
+    "HR workforce SaaS startup Central America Dominican Republic 2025 2026",
+    "marketplace B2B startup Central America pre-seed 2025 2026",
+    "circular economy secondhand marketplace startup Latin America 2025 2026",
+]
+THESIS_ADJACENT_TAGS: list[str] = [
+    "tavily:thesis-hr",
+    "tavily:thesis-marketplace",
+    "tavily:thesis-circular",
+]
+
+# ── Dominican Republic specific queries (Phase 3b) ────────────────────────
+DR_SPECIFIC_QUERIES: list[str] = [
+    "startup tecnología emprendimiento República Dominicana Santo Domingo 2025 2026",
+    "fintech startup Dominican Republic founder seed pre-seed 2025",
+    "INTEC PUCMM UNPHU startup emprendimiento Dominican Republic 2025",
+]
+DR_SPECIFIC_TAGS: list[str] = [
+    "tavily:dr-startup",
+    "tavily:dr-fintech",
+    "tavily:dr-universities",
+]
+
+# Merge all new query lists into TAVILY_MONITOR_QUERIES (maintains parallel-list invariant)
+TAVILY_MONITOR_QUERIES = (
+    TAVILY_MONITOR_QUERIES
+    + PORTFOLIO_DERIVED_QUERIES
+    + THESIS_ADJACENT_QUERIES
+    + DR_SPECIFIC_QUERIES
+)
+TAVILY_QUERY_TAGS = (
+    TAVILY_QUERY_TAGS
+    + PORTFOLIO_DERIVED_TAGS
+    + THESIS_ADJACENT_TAGS
+    + DR_SPECIFIC_TAGS
+)
 
 EVENT_CALENDAR_URLS: list[str] = [
     # ── Regional startup event calendars ──

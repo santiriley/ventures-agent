@@ -150,6 +150,15 @@ def _build_page_properties(profile: CompanyProfile) -> dict:
         "Notes": {
             "rich_text": [{"text": {"content": profile.notes or ""}}]
         },
+        "Portfolio Fit Score": {
+            "number": profile.portfolio_fit_score
+        },
+        "Portfolio Fit Note": {
+            "rich_text": [{"text": {"content": profile.portfolio_fit_note or ""}}]
+        },
+        "Non-CA Founder (Building in Region)": {
+            "checkbox": profile.non_ca_founder_building_in_region
+        },
     }
 
 
@@ -228,4 +237,73 @@ def push_lead(profile: CompanyProfile) -> str:
 
     page_id = resp.json().get("id", "")
     logger.info(f"[CREATED] {profile.name} → Notion page {page_id}")
+    return "created"
+
+
+# ── Market intel push ────────────────────────────────────────────────────────
+
+def push_market_intel(memo_text: str, run_date: str, queries: list[str]) -> str:
+    """
+    Push a disruption intelligence memo to NOTION_DB_MARKET_INTEL.
+
+    Returns "created" | "skipped".
+
+    Skips silently if NOTION_DB_MARKET_INTEL is not configured — the local
+    .tmp/disruption_memo_{date}.md file is sufficient as an artifact.
+
+    Does NOT fall back to NOTION_DB_EVENTS (incompatible schema).
+
+    Required Notion DB schema:
+      Name       (title)
+      Date       (date)
+      Memo       (rich_text)
+      Queries Run (rich_text)
+      Type       (select — must have "Market Intel" option)
+    """
+    db_id = config.get_optional_key("NOTION_DB_MARKET_INTEL")
+    if not db_id:
+        logger.info("NOTION_DB_MARKET_INTEL not set — disruption memo saved locally only.")
+        return "skipped"
+
+    properties = {
+        "Name": {
+            "title": [{"text": {"content": f"Disruption Intel — {run_date}"}}]
+        },
+        "Date": {
+            "date": {"start": run_date}
+        },
+        "Memo": {
+            "rich_text": [{"text": {"content": memo_text[:2000]}}]
+        },
+        "Queries Run": {
+            "rich_text": [{"text": {"content": "\n".join(queries)}}]
+        },
+        "Type": {
+            "select": {"name": "Market Intel"}
+        },
+    }
+
+    payload = {"parent": {"database_id": db_id}, "properties": properties}
+    resp = requests.post(
+        f"{config.NOTION_BASE_URL}/pages",
+        headers=_headers(),
+        json=payload,
+        timeout=config.REQUEST_TIMEOUT,
+    )
+
+    if resp.status_code == 401:
+        raise EnvironmentError("Notion API auth failed — check NOTION_API_KEY.")
+
+    if resp.status_code == 400:
+        error_msg = resp.json().get("message", resp.text)
+        raise ValueError(
+            f"Notion schema mismatch for market intel push.\n"
+            f"Error: {error_msg}\n"
+            f"Ensure NOTION_DB_MARKET_INTEL has: Name (title), Date, Memo, "
+            f"Queries Run (rich_text), Type (select with 'Market Intel' option)"
+        )
+
+    resp.raise_for_status()
+    page_id = resp.json().get("id", "")
+    logger.info(f"[CREATED] Disruption memo — {run_date} → Notion page {page_id}")
     return "created"

@@ -185,16 +185,27 @@ def geo_prescreen(name: str, snippet: str) -> bool:
     return any(country in text for country in full_names)
 
 
-def scan_tavily_queries(query_refinements: dict | None = None) -> list[tuple[str, str]]:
+def scan_tavily_queries(
+    query_refinements: dict | None = None,
+    extra_queries: list[str] | None = None,
+) -> list[tuple[str, str]]:
     """
     Run TAVILY_MONITOR_QUERIES via Tavily search and return (text, source_tag) tuples.
-    Used for JS-heavy sites (F6S, ProductHunt, Dealroom).
+    Used for JS-heavy sites (F6S, ProductHunt, Dealroom) plus dynamic disruption queries.
 
     query_refinements: optional dict mapping tag → extra search terms to append.
+    extra_queries: optional list of additional query strings (e.g. from disruption research).
+                   Auto-tagged as "tavily:extra:{i}". Capped at 8 to protect Tavily quota.
     Requires TAVILY_API_KEY. Silently skips if key is not set.
     """
-    queries = config.TAVILY_MONITOR_QUERIES
-    tags = config.TAVILY_QUERY_TAGS
+    queries = list(config.TAVILY_MONITOR_QUERIES)
+    tags = list(config.TAVILY_QUERY_TAGS)
+
+    if extra_queries:
+        for i, q in enumerate(extra_queries[:8]):
+            queries.append(q)
+            tags.append(f"tavily:extra:{i}")
+
     refinements = query_refinements or {}
 
     if not queries:

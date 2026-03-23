@@ -73,6 +73,9 @@ class CompanyProfile:
     date_found: str = ""
     notes: str = ""
     raw_input: str = ""
+    portfolio_fit_score: int = 0                        # Phase 2: deterministic pattern match score (0-4)
+    portfolio_fit_note: str = ""                        # Phase 2: human-readable explanation of score
+    non_ca_founder_building_in_region: bool = False     # Phase 3b: non-regional founder, CA/DR company
 
 
 # ── Calibration loader ──────────────────────────────────────────────────────
@@ -334,6 +337,67 @@ def _matches_sector_adjustment(profile: CompanyProfile, adj: dict, best_geo: int
         return False
 
     return True
+
+
+# ── PortfolioFitScore ────────────────────────────────────────────────────────
+
+def portfolio_fit_score(profile: CompanyProfile) -> tuple[int, str]:
+    """
+    Deterministic portfolio-fit scoring. No LLM calls.
+    Matches against structured profile fields + PORTFOLIO_PATTERNS aggregate.
+    Returns (score: int 0-4, note: str).
+
+    Signals are designed to be specific: prefer structured field matches over
+    free-text scanning to avoid inflating scores on generic tech terms.
+
+    Signal 1: sector matches a top portfolio sector (structured field)
+    Signal 2: business model matches portfolio BM strings against sector field
+              — NOT free text; "platform"/"api" would fire on everything
+    Signal 3: revenue model keyword in one_liner (specific enough to carry signal)
+    Signal 4: problem domain match against sector + one_liner
+    """
+    from portfolio.patterns import PORTFOLIO_PATTERNS
+
+    score = 0
+    signals: list[str] = []
+    sector = (profile.sector or "").lower()
+    one_liner = (profile.one_liner or "").lower()
+
+    # Signal 1: sector matches a top portfolio sector (structured field match)
+    for s in PORTFOLIO_PATTERNS["top_sectors"]:
+        if s.lower() in sector:
+            score += 1
+            signals.append(f"sector:{s}")
+            break
+
+    # Signal 2: business model — match actual portfolio BM strings against sector field
+    top_bms = [bm.lower() for bm in PORTFOLIO_PATTERNS["top_business_models"]]
+    for bm in top_bms:
+        if bm in sector:
+            score += 1
+            signals.append(f"model:{bm}")
+            break
+
+    # Signal 3: revenue model keyword — scan one_liner only (specific enough)
+    rev_keywords = {"subscription", "transaction fee", "commission", "net interest", "recurring revenue"}
+    for kw in rev_keywords:
+        if kw in one_liner:
+            score += 1
+            signals.append(f"revenue:{kw}")
+            break
+
+    # Signal 4: problem domain — match structured sector field + one_liner
+    for domain in PORTFOLIO_PATTERNS["top_domains"]:
+        if domain.lower() in sector or domain.lower() in one_liner:
+            score += 1
+            signals.append(f"domain:{domain}")
+            break
+
+    note = (
+        f"Portfolio fit {score}/4"
+        + (f" — {', '.join(signals)}" if signals else " — no pattern match")
+    )
+    return score, note
 
 
 # ── FindContact ─────────────────────────────────────────────────────────────
@@ -618,6 +682,30 @@ def enrich_with_claude(
 
     # Score thesis (pass calibration so sector adjustments are applied)
     profile.thesis = thesis_score(profile, calibration=calibration)
+
+    # ── Portfolio-fit scoring (deterministic, no LLM) ─────────────────────
+    fit_score, fit_note = portfolio_fit_score(profile)
+    profile.portfolio_fit_score = fit_score
+    profile.portfolio_fit_note = fit_note
+
+    # ── Non-CA founder building in region (annotation flag) ───────────────
+    # A CA HQ already fires Signal 4 in geo_score(), so geo_score ≥ 1 is common
+    # even for non-regional founders. This flag targets the case where the
+    # founder has < 2 geo signals (not clearly CA/DR) BUT the company is
+    # explicitly operating in the region. It is analyst-visibility only —
+    # not a pipeline gate.
+    _best_geo = max((f.geo_score for f in profile.founders), default=0)
+    # Use full country names only — 2-letter codes (NI, PA, DO…) are too short
+    # and cause false positives (e.g. "NI" matches "united", "DO" matches "done").
+    # This mirrors the same conservative approach used in geo_prescreen().
+    _region_full_names = {c.lower() for c in config.TARGET_COUNTRIES.keys()}
+    _text_lower = (
+        (profile.one_liner or "")
+        + " " + (profile.notes or "")
+        + " " + (profile.country or "")
+    ).lower()
+    if _best_geo < 2 and any(c in _text_lower for c in _region_full_names):
+        profile.non_ca_founder_building_in_region = True
 
     # Find contact (use first founder if available)
     primary_founder = profile.founders[0] if profile.founders else None

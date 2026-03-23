@@ -71,6 +71,10 @@ def print_profile(profile: CompanyProfile) -> None:
     print()
     if profile.contact:
         print(f"  Contact:   {profile.contact.email or '—'}  [{profile.contact.confidence}]")
+    if profile.portfolio_fit_note:
+        print(f"  Fit:       {profile.portfolio_fit_note}")
+    if profile.non_ca_founder_building_in_region:
+        print("  Flag:      Non-CA founder building in region — manual review recommended")
     if profile.notes:
         print(f"  Notes:     {profile.notes}")
     print(f"  Source:    {profile.source}  |  {profile.date_found or datetime.date.today()}")

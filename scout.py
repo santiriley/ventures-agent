@@ -31,9 +31,10 @@ import config
 from tools.notify import send_run_summary
 from enrichment.engine import enrich_with_claude, load_calibration
 from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names, geo_prescreen, stage_prescreen, funding_precheck
+from monitor.disruption import research_disruption_trends
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
-from notion.writer import push_lead
+from notion.writer import push_lead, push_market_intel
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_FILE = config.ROOT / "scout.log"
@@ -59,6 +60,27 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     # ── Load calibration ──────────────────────────────────────────────────────
     calibration = load_calibration()
 
+    # ── Step 0: Disruption intelligence research ──────────────────────────────
+    # Runs 2-3 Tavily basic searches + 1 Claude Sonnet call to generate a
+    # market memo and dynamic queries for this week's Tavily scan.
+    # Fails gracefully — never blocks the rest of the run.
+    logger.info("Step 0 — Researching disruption trends...")
+    disruption = research_disruption_trends(dry_run=dry_run)
+    dynamic_queries = disruption.get("queries", [])
+    logger.info(f"  {len(dynamic_queries)} dynamic disruption queries generated.")
+
+    if disruption.get("memo_text") and not dry_run:
+        try:
+            push_market_intel(
+                memo_text=disruption["memo_text"],
+                run_date=run_date,
+                queries=dynamic_queries,
+            )
+        except Exception as exc:
+            logger.warning(f"  Disruption memo Notion push failed (run continues): {exc}")
+    elif dry_run and disruption.get("memo_text"):
+        logger.info("  [dry-run] Disruption memo generated but not pushed to Notion.")
+
     stats = {
         "mentions_found": 0,
         "candidates": 0,
@@ -81,9 +103,10 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     batch_items = scan_batches()  # list[tuple[str, str]] (text, source_tag)
     logger.info(f"  {len(batch_items)} batch page(s) with new content.")
 
-    logger.info("Step 1b — Running Tavily monitor queries (F6S, ProductHunt, Dealroom)...")
+    logger.info("Step 1b — Running Tavily monitor queries (F6S, ProductHunt, Dealroom + portfolio-informed)...")
     tavily_items = scan_tavily_queries(
-        query_refinements=calibration.get("query_refinements")
+        query_refinements=calibration.get("query_refinements"),
+        extra_queries=dynamic_queries,
     )  # list[tuple[str, str]] (text, source_tag)
     logger.info(f"  {len(tavily_items)} Tavily query result(s) added.")
 
