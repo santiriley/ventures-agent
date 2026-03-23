@@ -36,7 +36,7 @@ PORTFOLIO_COMPANIES: list[dict] = [
     },
     {
         "name": "tumoni",
-        "country": "Costa Rica",
+        "country": "Nicaragua",
         "category": "fintech",
         "business_model": "digital wallet",
         "revenue_model": "transaction fees",
@@ -135,7 +135,7 @@ PORTFOLIO_COMPANIES: list[dict] = [
     },
     {
         "name": "boxful",
-        "country": "Guatemala",
+        "country": "El Salvador",
         "category": "logistics",
         "business_model": "last-mile logistics",
         "revenue_model": "transaction fees",
