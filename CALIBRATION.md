@@ -27,6 +27,7 @@ are appended here automatically without analyst action.
 - Brex
 - Neon
 - Creditas
+- Corporación Aeromar
 <!-- feedback.py:false_positives:end -->
 
 ---
