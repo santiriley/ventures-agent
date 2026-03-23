@@ -21,6 +21,7 @@ import anthropic
 import requests
 
 import config
+from tools.github import format_github_note, github_stats
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 class Founder:
     name: str = ""
     linkedin_url: str = ""
+    github_url: str = ""
     education: list[str] = field(default_factory=list)
     previous_roles: list[str] = field(default_factory=list)
     location: str = ""
@@ -449,6 +451,7 @@ Return ONLY valid JSON matching this schema:
     {
       "name": "Full Name",
       "linkedin_url": "https://linkedin.com/in/...",
+      "github_url": "https://github.com/handle or empty string",
       "education": ["University Name (Year)"],
       "previous_roles": ["Role at Company"],
       "location": "City, Country (from LinkedIn)",
@@ -567,6 +570,7 @@ def enrich_with_claude(
         founder = Founder(
             name=fd.get("name") or "",
             linkedin_url=fd.get("linkedin_url") or "",
+            github_url=fd.get("github_url") or "",
             education=fd.get("education") or [],
             previous_roles=fd.get("previous_roles") or [],
             location=fd.get("location") or "",
@@ -587,6 +591,17 @@ def enrich_with_claude(
     if uncertain_founders:
         flag = f"⚠️ LinkedIn data unverified for: {', '.join(uncertain_founders)} — geo signals based on inferred data only."
         profile.notes = (profile.notes + "\n" + flag).strip() if profile.notes else flag
+
+    # Fetch GitHub stats for founders with a known GitHub URL
+    for f in profile.founders:
+        if f.github_url:
+            try:
+                stats = github_stats(f.github_url)
+                if stats:
+                    note_line = f"GitHub ({f.name}): {format_github_note(stats)}"
+                    profile.notes = (profile.notes + "\n" + note_line).strip()
+            except Exception as exc:
+                logger.warning("GitHub lookup failed for %s: %s", f.name, exc)
 
     # Score thesis (pass calibration so sector adjustments are applied)
     profile.thesis = thesis_score(profile, calibration=calibration)

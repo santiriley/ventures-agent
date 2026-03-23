@@ -35,7 +35,7 @@ are appended here automatically without analyst action.
 Deprioritize companies founded before this year unless strong early-stage signals are present
 (recent pivot, new product line, pre-revenue confirmed). Claude will flag these in the Notes field.
 <!-- feedback.py:founding_year:start -->
-Current threshold: 2019
+Current threshold: 2021
 <!-- feedback.py:founding_year:end -->
 
 ---
