@@ -147,7 +147,7 @@ BATCH_URL_TAGS: dict[str, str] = {
     "https://startup.google.com/accelerator/latin-america/": "google-startups",
     "https://www.pucmm.edu.do/investigacion/incubadora": "pucmm",
     "https://www.parquetec.org/en/proyectos": "parquetec",
-    "https://contxto.com/en/startups/": "contxto",
+    # "https://contxto.com/en/startups/": "contxto",  # removed 2026-03-23 — SSL fails on Python 3.9/LibreSSL; covered via tavily:contxto
     "https://iupana.com": "iupana",
     "https://www.seedstars.com/companies/": "seedstars",
     "https://vilcap.com/portfolio": "vilcap",
@@ -168,6 +168,7 @@ TAVILY_QUERY_TAGS: list[str] = [
     "tavily:cohorts",
     "tavily:govGrants",
     "tavily:uniIncubators",
+    "tavily:contxto",
 ]
 
 ACCELERATOR_BATCH_URLS: list[str] = [
@@ -195,7 +196,7 @@ ACCELERATOR_BATCH_URLS: list[str] = [
     "https://www.parquetec.org/en/proyectos",           # ParqueTec CR portfolio (was parquetec.ucr.ac.cr)
 
     # ── CA/DR tech media (Tier 1 addition 2026-03-12) ──
-    "https://contxto.com/en/startups/",                 # Contxto — primary CA/DR startup media
+    # "https://contxto.com/en/startups/",                # removed 2026-03-23 — SSL fails on Python 3.9/LibreSSL; covered via tavily:contxto
     "https://iupana.com",                               # iupana — fintech-focused LATAM news
 
     # ── International accelerators with CA/DR deal flow (Tier 2 addition 2026-03-12) ──
@@ -250,6 +251,8 @@ TAVILY_MONITOR_QUERIES: list[str] = [
     "PROCOMER SENACYT grant startup tecnología 2025 2026",
     # University incubator cohorts — Spanish terms surface regional announcements
     "incubadora startup cohorte emprendimiento Costa Rica Guatemala Honduras Panama",
+    # Contxto — primary CA/DR startup media; moved from batch scraping (SSL fails on Python 3.9/LibreSSL)
+    "Contxto startup Central America Dominican Republic pre-seed seed 2025 2026",
 ]
 # NOTE: Operator-heavy queries (site:, OR chains, negative terms) degrade Tavily's semantic
 # search quality. Keep these short. Late-stage results are filtered post-retrieval by
@@ -258,7 +261,7 @@ TAVILY_MONITOR_QUERIES: list[str] = [
 EVENT_CALENDAR_URLS: list[str] = [
     # ── Regional startup event calendars ──
     "https://events.iadb.org/",                         # IDB Lab events (migrated from idblab.iadb.org)
-    "https://www.campusverde.cr/eventos/",
+    # "https://www.campusverde.cr/eventos/",  # removed 2026-03-23 — domain is dead
     # Note: Meetup/Eventbrite pages are JS-rendered and may not scrape cleanly
 ]
 
