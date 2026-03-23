@@ -21,6 +21,7 @@ import anthropic
 import requests
 
 import config
+from config import OVER_STAGE_VALUES
 from tools.github import format_github_note, github_stats
 
 logger = logging.getLogger(__name__)
@@ -253,20 +254,27 @@ def thesis_score(profile: CompanyProfile, calibration: dict | None = None) -> Th
     """
     has_tech = bool(profile.sector)  # sector populated = tech confirmed by Claude
     has_mvp = profile.stage.lower() not in ("idea", "pre-mvp", "")
+    is_over_stage = profile.stage.lower() in OVER_STAGE_VALUES
 
     # Find best founder geo score
     founder_geo_scores = [f.geo_score for f in profile.founders] if profile.founders else [0]
     best_geo = max(founder_geo_scores) if founder_geo_scores else 0
 
-    # Check for traction signals (keywords in one_liner or notes)
+    # Check for traction signals (keywords in one_liner or notes).
+    # NOTE: "raised", "seed", "series", "growth" removed — these match late-stage language
+    # (e.g. "raised $187M Series C") and inflate scores for out-of-thesis companies.
+    # NOTE: early_stage_traction uses Claude's extracted stage field, which is point-in-time.
+    # A company that raised seed in 2022 may now be Series B. The founding_year filter in
+    # CALIBRATION.md partially mitigates this, but treat seed-stage traction as a soft signal.
     traction_keywords = [
         "revenue", "mrr", "arr", "users", "customers", "clients",
-        "growth", "raised", "seed", "pre-seed", "series",
         "traction", "paying",
     ]
-    has_traction = any(
-        kw in (profile.one_liner + " " + profile.notes).lower()
-        for kw in traction_keywords
+    text_lower = (profile.one_liner + " " + profile.notes).lower()
+    early_stage_traction = profile.stage.lower() in ("seed", "series-a") and not is_over_stage
+    has_traction = (
+        any(kw in text_lower for kw in traction_keywords)
+        or early_stage_traction
     )
 
     if best_geo >= 2 and has_tech and has_mvp and has_traction:
@@ -287,6 +295,11 @@ def thesis_score(profile: CompanyProfile, calibration: dict | None = None) -> Th
             score, rationale = 1, "Weak CA/DR signal — fewer than 2 geo signals; flagged for manual analyst review."
     else:
         score, rationale = 1, "Insufficient signals for thesis match; flagged for manual analyst review."
+
+    # ── Cap score for over-stage companies ───────────────────────────────────
+    if is_over_stage:
+        score = min(score, 2)
+        rationale += " [Stage: Series B+ — outside fund mandate; blocked from pipeline.]"
 
     # ── Post-processing: apply sector adjustments from calibration ────────────
     if calibration:

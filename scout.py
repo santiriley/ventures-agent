@@ -30,7 +30,7 @@ from pathlib import Path
 import config
 from tools.notify import send_run_summary
 from enrichment.engine import enrich_with_claude, load_calibration
-from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names, geo_prescreen
+from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names, geo_prescreen, stage_prescreen, funding_precheck
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
 from notion.writer import push_lead
@@ -63,10 +63,13 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
         "mentions_found": 0,
         "candidates": 0,
         "skipped_no_geo": 0,
+        "skipped_late_stage_snippet": 0,
         "skipped_false_positive": 0,
+        "skipped_late_stage_precheck": 0,
         "added": 0,
         "skipped_duplicate": 0,
         "skipped_portfolio": 0,
+        "skipped_stage": 0,
         "failed": 0,
     }
 
@@ -110,6 +113,11 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
                 logger.info(f"    ⏭  {name} — no CA/DR geo signal in source")
                 continue
 
+            if not stage_prescreen(name, snippet):
+                stats["skipped_late_stage_snippet"] += 1
+                logger.info(f"    ⏭  {name} — late-stage signal in source snippet")
+                continue
+
             candidates.append((name, source_tag))
 
     # Network mentions carry their own context — use full snippet for geo screen
@@ -151,6 +159,13 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             logger.info(f"    ⏭  Known false positive: {raw[:60]}")
             continue
 
+        # Funding precheck — 1 cheap Tavily search before the full 5-search enrichment
+        skip_reason = funding_precheck(raw.strip().split("\n")[0][:80])
+        if skip_reason:
+            stats["skipped_late_stage_precheck"] += 1
+            logger.info(f"    ⏭  {raw[:60]} — {skip_reason}")
+            continue
+
         try:
             profile = enrich_with_claude(
                 raw,
@@ -182,6 +197,9 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             elif result == "portfolio":
                 stats["skipped_portfolio"] += 1
                 logger.info(f"    🚫 Portfolio: {profile.name}")
+            elif result == "stage_blocked":
+                stats["skipped_stage"] += 1
+                logger.info(f"    🚫 Stage-blocked: {profile.name} ({profile.stage})")
             elif result == "skipped_dry_run":
                 stats["added"] += 1   # count as "would have been added"
                 logger.info(f"    🔎 [dry-run] Would push: {profile.name}")
@@ -241,14 +259,17 @@ def _print_summary(stats: dict, run_date: str, failed: bool = False) -> None:
     logger.info("=" * 40)
     logger.info(f"Weekly Monitor — Run Summary ({run_date})")
     logger.info("=" * 40)
-    logger.info(f"  Mentions found:     {stats['mentions_found']}")
-    logger.info(f"  Skipped (no geo):   {stats.get('skipped_no_geo', 0)}")
-    logger.info(f"  Skipped (false pos):{stats.get('skipped_false_positive', 0)}")
-    logger.info(f"  Candidates:         {stats['candidates']}")
-    logger.info(f"  Added to Notion:    {stats['added']}")
-    logger.info(f"  Skipped (dup):      {stats['skipped_duplicate']}")
-    logger.info(f"  Skipped (portf.):   {stats['skipped_portfolio']}")
-    logger.info(f"  Failed:             {stats['failed']}")
+    logger.info(f"  Mentions found:        {stats['mentions_found']}")
+    logger.info(f"  Skipped (no geo):      {stats.get('skipped_no_geo', 0)}")
+    logger.info(f"  Skipped (late snippet):{stats.get('skipped_late_stage_snippet', 0)}")
+    logger.info(f"  Candidates:            {stats['candidates']}")
+    logger.info(f"  Skipped (false pos):   {stats.get('skipped_false_positive', 0)}")
+    logger.info(f"  Skipped (precheck):    {stats.get('skipped_late_stage_precheck', 0)}")
+    logger.info(f"  Added to Notion:       {stats['added']}")
+    logger.info(f"  Skipped (dup):         {stats['skipped_duplicate']}")
+    logger.info(f"  Skipped (portf.):      {stats['skipped_portfolio']}")
+    logger.info(f"  Skipped (stage gate):  {stats.get('skipped_stage', 0)}")
+    logger.info(f"  Failed:                {stats['failed']}")
     logger.info("=" * 40)
     logger.info("")
 

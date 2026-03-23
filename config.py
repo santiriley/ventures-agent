@@ -95,6 +95,16 @@ LEGAL_SUFFIXES = (
     " co.", " co", " srl", " sa",
 )
 
+# ── Stage filtering ────────────────────────────────────────────────────────
+# Stages that are outside the fund mandate (Pre-seed · Seed · Series A).
+# Used by enrichment/engine.py (score cap) and notion/writer.py (hard gate).
+# Single source of truth — import this constant; do not redefine it elsewhere.
+OVER_STAGE_VALUES: frozenset[str] = frozenset({
+    "series-b", "series b", "series-c", "series c",
+    "series-d", "series d", "series-e", "series e",
+    "growth", "public", "ipo", "pre-ipo", "late-stage",
+})
+
 # ── Thesis score labels ────────────────────────────────────────────────────
 THESIS_SCORE_LABELS = {
     5: "⭐⭐⭐⭐⭐ — CA/DR founder + tech + MVP live + traction signals",
@@ -153,6 +163,11 @@ TAVILY_QUERY_TAGS: list[str] = [
     "tavily:f6s",
     "tavily:producthunt",
     "tavily:dealroom",
+    # Pre-raise signal queries (Tier 3 addition 2026-03-23)
+    "tavily:demoDays",
+    "tavily:cohorts",
+    "tavily:govGrants",
+    "tavily:uniIncubators",
 ]
 
 ACCELERATOR_BATCH_URLS: list[str] = [
@@ -188,6 +203,23 @@ ACCELERATOR_BATCH_URLS: list[str] = [
     "https://vilcap.com/portfolio",                     # Village Capital — CA/DR programs
     "https://unreasonablegroup.com/companies/",         # Unreasonable Group — LATAM cohorts
 
+    # ── Pre-raise signal sources (Tier 3 addition 2026-03-23) ──────────────
+    # These surface companies before institutional funding, complementing the
+    # post-investment directories above.
+    # All candidates tested for HTML renderability — none survived:
+    #   startuphonduras.com — JS SPA, no content in HTML
+    #   senacyt.gob.pa — CAPTCHA/JS challenge
+    #   accelerate2030.net/costa-rica — HTTP 500
+    #   nacionemprendedora.go.cr — HTTP 404
+    #   kec.ufm.edu — static HTML but no company listings, only programs/events
+    #   startup.google.com/accelerator/latino-founders — alumni (post-raise)
+    #   procomer.com/programa-impulso-tecnologico — winners in PDF, not scrape-able
+    #   tec.ac.cr/emprendimientos-apoyados-tec-emprende-lab — static HTML with company
+    #     names, but they appear after char ~4400; extract_company_names() only passes
+    #     the first 4000 chars to Claude (navigation fills those). Surfaced via
+    #     tavily:uniIncubators query instead.
+    # Pre-raise deal flow is sourced via the 4 new Tavily queries below.
+
     # ── Removed (no active portal confirmed as of 2026-03-10) ──
     # "https://endeavorguatemala.org/empresas/"         # Endeavor GT — org closed regional site
     # "https://endeavorcostarica.org/empresas/"         # Endeavor CR — org closed regional site
@@ -203,13 +235,25 @@ NETWORK_PROFILE_URLS: list[str] = [
 # Used by monitor/batches.py:scan_tavily_queries() during the weekly run.
 # Results are passed through Claude (fast model) for company name extraction, same as batch pages.
 TAVILY_MONITOR_QUERIES: list[str] = [
-    # F6S — startups self-list when applying to accelerators
-    "site:f6s.com startup Costa Rica OR Guatemala OR Honduras OR \"El Salvador\" OR Panama OR Nicaragua OR \"Dominican Republic\"",
-    # ProductHunt — LATAM founders launch here
-    "site:producthunt.com startup founder \"Costa Rica\" OR \"Guatemala\" OR \"Honduras\" OR \"El Salvador\" OR \"Panama\" OR \"Dominican Republic\"",
-    # Dealroom — better LATAM early-stage data than Crunchbase
-    "site:dealroom.co startup \"Central America\" OR \"Costa Rica\" OR \"Guatemala\" OR \"Dominican Republic\" seed OR \"pre-seed\"",
+    # F6S — early-stage startup applications (keep queries short; Tavily is semantic, not Google)
+    "early stage pre-seed seed startup founder Costa Rica Guatemala Honduras El Salvador Panama Nicaragua Dominican Republic",
+    # ProductHunt — recent product launches by LATAM founders
+    "ProductHunt new startup launch Costa Rica Guatemala Honduras El Salvador Panama Dominican Republic 2024 2025",
+    # Dealroom — seed stage Central America Caribbean
+    "seed pre-seed startup Central America Dominican Republic early stage 2023 2024 2025",
+    # ── Pre-raise signal queries (Tier 3 addition 2026-03-23) ──────────────
+    # Demo days and pitch competitions — companies presenting publicly = pre-raise signal
+    "demo day pitch competition startup Costa Rica Guatemala Honduras El Salvador Panama Dominican Republic 2025 2026",
+    # Accelerator cohort acceptance announcements — first public signal a company exists
+    "accelerator cohort accepted startup Central America Dominican Republic 2025 2026",
+    # Government innovation grants — PROCOMER (CR) and SENACYT (PA) publish grant winners
+    "PROCOMER SENACYT grant startup tecnología 2025 2026",
+    # University incubator cohorts — Spanish terms surface regional announcements
+    "incubadora startup cohorte emprendimiento Costa Rica Guatemala Honduras Panama",
 ]
+# NOTE: Operator-heavy queries (site:, OR chains, negative terms) degrade Tavily's semantic
+# search quality. Keep these short. Late-stage results are filtered post-retrieval by
+# stage_prescreen() in monitor/batches.py before they reach Claude for name extraction.
 
 EVENT_CALENDAR_URLS: list[str] = [
     # ── Regional startup event calendars ──

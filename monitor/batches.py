@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -97,6 +98,79 @@ def extract_company_names(page_text: str) -> list[tuple[str, str]]:
     except Exception as exc:
         logger.warning(f"Company name extraction failed: {exc}")
     return []
+
+
+# ── Late-stage snippet filter ─────────────────────────────────────────────────
+# Matches strong late-stage signals: Series B+, $10M+ amounts, IPO, unicorn.
+# "$2M seed round" won't match (requires 2+ digits before M).
+_LATE_STAGE_PATTERNS = re.compile(
+    r"series\s*[b-z]|"
+    r"\$\d{2,4}\s*m(?:illion)?|"
+    r"(?:raised|funding|round)\s+\$?\d{2,4}\s*m|"
+    r"\bipo\b|\bpre-ipo\b|\bgrowth[\s-]stage\b|\blate[\s-]stage\b|"
+    r"\bunicorn\b|\bdecacorn\b",
+    re.IGNORECASE,
+)
+
+
+def stage_prescreen(name: str, snippet: str) -> bool:
+    """
+    Return True if the company appears early-stage (safe to proceed to enrichment).
+    Return False if late-stage signals are detected in the name+snippet text.
+
+    Deterministic — no API call. Conservative: only blocks on strong signals.
+    A $2M seed mention will NOT trigger this (requires 2+ digit dollar amounts).
+    Fails open: returns True when snippet is empty or ambiguous.
+    """
+    text = f"{name} {snippet}"
+    return not bool(_LATE_STAGE_PATTERNS.search(text))
+
+
+def funding_precheck(company_name: str) -> str | None:
+    """
+    Run one cheap Tavily basic search to check for late-stage funding signals
+    before committing to full enrichment (5 advanced searches + Claude Opus call).
+
+    Returns a reason string if the company should be skipped, or None if safe to enrich.
+    Fails open: returns None on any error or missing API key.
+
+    Cost savings: catches ~1 Tavily advanced search + 1 Opus call per blocked company.
+    """
+    tavily_key = config.get_optional_key("TAVILY_API_KEY")
+    if not tavily_key:
+        return None  # fail open
+
+    import requests as _requests
+    try:
+        payload = {
+            "api_key": tavily_key,
+            "query": f"{company_name} funding raised series",
+            "search_depth": "basic",
+            "max_results": 3,
+            "include_answer": False,
+            "include_raw_content": False,
+        }
+        resp = _requests.post(
+            "https://api.tavily.com/search", json=payload, timeout=config.REQUEST_TIMEOUT
+        )
+        if resp.status_code != 200:
+            return None  # fail open
+
+        results = resp.json().get("results", [])
+        combined = " ".join(
+            f"{r.get('title', '')} {r.get('content', '')}" for r in results
+        ).lower()
+
+        match = _LATE_STAGE_PATTERNS.search(combined)
+        if match:
+            return f"funding precheck: '{match.group()}' found in search results"
+        return None  # safe to enrich
+
+    except Exception as exc:
+        logger.warning(f"Funding precheck failed for {company_name}: {exc}")
+        return None  # fail open
+    finally:
+        time.sleep(config.REQUEST_DELAY)
 
 
 def geo_prescreen(name: str, snippet: str) -> bool:

@@ -43,7 +43,7 @@ Current threshold: 2021
 ## Raise Amount Filter
 Deprioritize leads where total known funding exceeds this amount. Claude will flag these in Notes.
 <!-- feedback.py:raise_threshold:start -->
-Current threshold: $1M USD
+Current threshold: $3M USD
 <!-- feedback.py:raise_threshold:end -->
 
 ---

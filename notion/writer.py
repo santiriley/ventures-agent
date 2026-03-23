@@ -13,6 +13,7 @@ import logging
 import requests
 
 import config
+from config import OVER_STAGE_VALUES
 from enrichment.engine import CompanyProfile
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,30 @@ def _search_existing(name: str) -> str | None:
 
 def _is_portfolio(name: str) -> bool:
     return _normalize_name(name) in config.PORTFOLIO_COMPANIES
+
+
+# Funding signals that suggest a stage='unknown' company is actually late-stage.
+# These are checked against notes + one_liner to catch companies Claude couldn't stage.
+_LARGE_RAISE_SIGNALS = [
+    "$5m", "$10m", "$15m", "$20m", "$50m", "$100m",
+    "series b", "series c", "series d", "growth round",
+]
+
+
+def _is_too_late_stage(profile: CompanyProfile) -> bool:
+    """Return True if the company's extracted stage is outside the fund mandate."""
+    return profile.stage.lower() in OVER_STAGE_VALUES
+
+
+def _is_unknown_stage_but_overfunded(profile: CompanyProfile) -> bool:
+    """
+    Return True if stage is 'unknown' but notes/one_liner contain large funding signals.
+    Catches companies where Claude couldn't determine stage but funding data is clearly late-stage.
+    """
+    if profile.stage.lower() != "unknown":
+        return False
+    text = (profile.notes + " " + profile.one_liner).lower()
+    return any(sig in text for sig in _LARGE_RAISE_SIGNALS)
 
 
 def _build_page_properties(profile: CompanyProfile) -> dict:
@@ -137,7 +162,8 @@ def push_lead(profile: CompanyProfile) -> str:
     Returns:
       "created"   — new page created, Status = "New 🆕"
       "duplicate" — company already exists, skipped silently
-      "portfolio" — known portfolio company, skipped silently
+      "portfolio"      — known portfolio company, skipped silently
+      "stage_blocked"  — Series B+ or unknown-stage with large funding signals
 
     Raises:
       EnvironmentError — on auth failure (stops the run)
@@ -151,6 +177,11 @@ def push_lead(profile: CompanyProfile) -> str:
     if _is_portfolio(profile.name):
         logger.info(f"[SKIP portfolio] {profile.name}")
         return "portfolio"
+
+    # Stage gate — block Series B+ and unknown-stage companies with large funding signals
+    if _is_too_late_stage(profile) or _is_unknown_stage_but_overfunded(profile):
+        logger.info(f"[SKIP stage] {profile.name} — stage '{profile.stage}' outside fund mandate")
+        return "stage_blocked"
 
     # Duplicate check
     existing_id = _search_existing(profile.name)
