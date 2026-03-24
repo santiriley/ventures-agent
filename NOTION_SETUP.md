@@ -69,12 +69,27 @@ Add these options to the `Status` select property in order:
 | `Passed ❌` | Declined; add Pass Reason in Notes |
 | `Stale ⏸` | No response after 3 follow-ups |
 
+### Additional properties (created automatically on first push)
+
+The writer also pushes these fields — create them in Notion if you want them visible:
+
+| Property name | Type | Notes |
+|---|---|---|
+| `Portfolio Fit Score` | Number | 0–4; how closely this company matches portfolio patterns |
+| `Portfolio Fit Note` | Text | Explanation of the fit score |
+| `Traction Signals` | Text | Concrete evidence: users, revenue, partnerships |
+| `Founder Background` | Text | Relevant domain experience summary |
+| `Non-CA Founder (Building in Region)` | Checkbox | True when a non-CA/DR founder is explicitly targeting the region |
+
 ### Recommended views
 
 - **All Leads** — default table, sorted by Date Found (newest first)
 - **Pipeline** — Board view, grouped by Status
 - **High Priority** — Filter: Thesis Score ≥ 4, Status = New 🆕
 - **Needs Contact** — Filter: Contact Confidence = ⚠️ Manual
+- **Non-CA Founders** — Filter: `Non-CA Founder (Building in Region)` = ✓ AND `Thesis Score` = 2
+  > Use this view to review Score 2 leads — non-regional founders explicitly building for CA/DR.
+  > These are valid thesis fits but need analyst confirmation before outreach.
 
 ---
 
@@ -101,7 +116,59 @@ Only needed if you want `scout.py` to push startup events to Notion.
 
 ---
 
-## 4. Add keys to `.env`
+## 4. Disruption Research Database (optional)
+
+This database receives structured sector memos from the weekly monitor (Step 0b).
+Each page represents one disruption theme for a given quarter (e.g. "Fintech — Q1 2026").
+Pages are created automatically by `scout.py` if `NOTION_DB_DISRUPTION` is set.
+
+### Create the database
+
+1. Create a new full-page database named `Carica Disruption Research`
+2. Copy its ID from the URL → this is your `NOTION_DB_DISRUPTION`
+3. Connect the `Carica Scout` integration (same as above)
+4. Place it in the same Notion workspace section as `Carica Leads` for easy access
+
+### Required properties
+
+Create exactly these properties (case-sensitive):
+
+| Property name | Type | Notes |
+|---|---|---|
+| `Name` | Title | Auto-filled: "Sector — Q1 2026" |
+| `Sector` | Select | Values auto-created: Fintech, Agritech, Logistics, etc. |
+| `Date` | Date | Run date |
+| `Refresh Due` | Date | Auto-set to run date + 90 days |
+| `Incumbents Disrupted` | Text | Which companies/industries are being threatened |
+| `Disruption Pattern` | Select | Values: Bypass · Unbundling · New category · Digitization · Cost collapse · Platform shift |
+| `Why Now` | Text | Market timing rationale |
+| `Key Evidence` | Text | 3–5 data points |
+| `Counterargument` | Text | What could prove this wrong |
+| `CA/DR Angle` | Text | Why this matters specifically for the region |
+| `Companies Spotted` | Text | Comma-separated company names seen in this theme |
+| `Next Research` | Text | Follow-up queries to run next week |
+| `Confidence` | Select | Values: **Strong signal** · **Emerging** · **Speculative** |
+| `Queries Run` | Text | Tavily queries that produced this memo |
+| `Type` | Select | Must have option: **Sector Memo** |
+
+### Recommended views
+
+- **By Sector** — Group by `Sector`; see all themes per vertical at a glance
+- **Needs Refresh** — Filter: `Refresh Due` is on or before today; prompts analyst to re-run research
+- **Strong Signals** — Filter: `Confidence` = Strong signal; your highest-conviction disruption bets
+- **This Quarter** — Filter: `Date` is within the current quarter
+
+### How to use
+
+Each Monday after `scout.py` runs, open this database to see:
+1. Which sectors are seeing the most activity this week
+2. Which incumbents are under pressure (link to your analyst meetings)
+3. The counterargument column — use this as a devil's advocate before a deal
+4. `Next Research` — run these queries manually in Tavily or Perplexity for deeper dives
+
+---
+
+## 5. Add keys to `.env`
 
 ```bash
 cp .env.example .env
@@ -113,14 +180,15 @@ Then fill in:
 ANTHROPIC_API_KEY=sk-ant-...
 NOTION_API_KEY=secret_...
 NOTION_DB_LEADS=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_DB_EVENTS=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # optional
-HUNTER_API_KEY=...                                   # optional
-TAVILY_API_KEY=tvly-...                             # optional, highly recommended
+NOTION_DB_EVENTS=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx       # optional
+NOTION_DB_DISRUPTION=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # optional
+HUNTER_API_KEY=...                                       # optional
+TAVILY_API_KEY=tvly-...                                 # optional, highly recommended
 ```
 
 ---
 
-## 5. Verify setup
+## 6. Verify setup
 
 ```bash
 # Enrich one company without pushing — checks API keys and extraction

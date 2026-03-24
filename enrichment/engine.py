@@ -289,10 +289,16 @@ def thesis_score(profile: CompanyProfile, calibration: dict | None = None) -> Th
     elif best_geo >= 2 and has_tech:
         score, rationale = 3, "Likely CA/DR founder (2+ geo signals) with tech foundation; MVP status unclear."
     elif best_geo < 2 and has_tech:
-        # Check if explicitly targeting region
-        region_target = any(
-            c.lower() in (profile.one_liner + " " + profile.notes).lower()
-            for c in config.CA_DR_COUNTRY_NAMES
+        # Check if explicitly targeting region — includes Spanish variants not in CA_DR_COUNTRY_NAMES
+        _REGION_KEYWORDS = {
+            "centroamérica", "centroamerica", "centro america", "centro-america",
+            "caribe", "caribbean", "región", "la región",
+            "latinoamérica", "latinoamerica", "latam",
+        }
+        text_for_region = (profile.one_liner + " " + profile.notes).lower()
+        region_target = (
+            any(c.lower() in text_for_region for c in config.CA_DR_COUNTRY_NAMES)
+            or any(kw in text_for_region for kw in _REGION_KEYWORDS)
         )
         if region_target:
             score, rationale = 2, "External founder explicitly targeting CA/DR market with tech product."

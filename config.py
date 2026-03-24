@@ -26,6 +26,7 @@ REQUIRED_KEYS = {
 OPTIONAL_KEYS = {
     "NOTION_DB_EVENTS": "Second Notion database for events",
     "NOTION_DB_MARKET_INTEL": "Notion database for disruption intelligence memos (optional, no fallback)",
+    "NOTION_DB_DISRUPTION": "Notion database for structured disruption research sector memos (optional)",
     "HUNTER_API_KEY": "hunter.io → free tier",
     "TAVILY_API_KEY": "app.tavily.com → API Keys (free tier available)",
 }
@@ -94,13 +95,18 @@ CA_DR_CITY_NAMES: frozenset[str] = frozenset({
     "san salvador",                                            # El Salvador
     "managua",                                                 # Nicaragua
     "panama city", "ciudad de panamá", "ciudad de panama",    # Panama
-    "santo domingo", "santiago de los caballeros",             # Dominican Republic
+    "santo domingo", "santiago de los caballeros",             # Dominican Republic (major cities)
+    "la romana", "puerto plata", "san francisco de macorís",   # Dominican Republic (secondary)
+    "san francisco de macoris", "san pedro de macorís",        # Dominican Republic (alt spellings)
+    "san pedro de macoris", "bonao", "higüey", "higuey",       # Dominican Republic (secondary)
+    "barahona",                                                # Dominican Republic (secondary)
     "belize city",                                             # Belize
 })
 
 # CA/DR country-code TLDs — catch domain URLs like "company.cr" in snippets
+# .com.do is a common DR second-level domain (e.g., empresa.com.do)
 CA_DR_DOMAIN_TLDS: frozenset[str] = frozenset({
-    ".cr", ".gt", ".hn", ".sv", ".ni", ".pa", ".do", ".bz"
+    ".cr", ".gt", ".hn", ".sv", ".ni", ".pa", ".do", ".com.do", ".bz"
 })
 
 PORTFOLIO_COMPANIES = {

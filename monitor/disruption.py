@@ -1,17 +1,24 @@
 """
 monitor/disruption.py — Disruption intelligence layer for Carica Scout.
 
-Runs as Step 0 of the weekly monitor (scout.py). Uses 2-3 Tavily basic searches
-to gather current trend context, then calls Claude Sonnet to synthesize a short
-market memo and generate dynamic Tavily search queries for this week's run.
+Runs as Step 0 of the weekly monitor (scout.py). Uses Tavily basic searches
+to gather current trend context, then calls Claude Sonnet to synthesize structured
+sector memos and generate dynamic Tavily search queries for this week's run.
 
 Primary function:
   research_disruption_trends(dry_run: bool = False) -> dict
     Returns: {
-      "queries": list[str],   # dynamic queries to pass to scan_tavily_queries()
-      "memo_path": str,       # path to saved .md file (empty on dry_run or failure)
-      "memo_text": str,       # synthesized memo (empty on failure)
+      "queries":   list[str],   # dynamic queries to pass to scan_tavily_queries()
+      "memo_path": str,         # path to saved .md file (empty on dry_run or failure)
+      "memo_text": str,         # synthesized memo summary (empty on failure)
+      "themes":    list[dict],  # structured sector memos for push_disruption_memo()
     }
+
+Each theme dict has:
+  sector, incumbents_disrupted, disruption_pattern, why_now,
+  key_evidence (list), counterargument, ca_dr_angle,
+  companies_spotted (list), next_research (list),
+  confidence (strong_signal|emerging|speculative), search_queries (list)
 
 All failure modes fail gracefully — this step must NEVER block the weekly run.
 """
@@ -44,38 +51,52 @@ _CONTEXT_QUERIES: list[str] = [
 _MEMO_PROMPT_TEMPLATE = """\
 You are a VC analyst assistant for Carica VC, a Central American and Dominican Republic fund.
 
-The fund's portfolio is concentrated in these sectors: {sectors}.
-Key problem domains the fund has invested in: {domains}.
+Fund thesis: invests ≥$100K USD in tech startups with at least one CA/DR founder \
+(or a non-regional founder explicitly building for the CA/DR market), an MVP, and \
+early traction. Target stages: pre-seed, seed, Series A.
 
-The fund's current forward-looking investment hypotheses (use these to prioritize \
-which trends are most relevant, but do not limit yourself to only these):
+Portfolio sectors: {sectors}. Key problem domains: {domains}.
+
+Current forward-looking investment hypotheses:
 {hypotheses}
 
-Based on the Tavily search results below, write a concise market intelligence memo \
-(200-300 words) covering:
-1. Notable emerging trends in the CA/DR startup ecosystem
-2. Sectors gaining momentum in the region
-3. Any global tech trends that have NOT yet been replicated in CA/DR and represent \
-an opportunity for a local founder
+Based on the search results below, identify 3-5 significant disruption themes relevant \
+to CA/DR. For each theme, think about:
+- What incumbent industry/player is being disrupted?
+- Why is disruption happening NOW (infrastructure, regulation, behavior shift)?
+- What is the disruption pattern (bypass incumbent, unbundling, new category, \
+digitization, cost collapse)?
+- What is the specific CA/DR angle — why does this matter in the region?
+- What companies are already doing this (if you see names in the results)?
+- What would prove this thesis wrong?
 
-For each major trend you identify, suggest 1-2 specific Tavily search queries (short, \
-semantic — no operators) that would surface early-stage startups in CA/DR building \
-in that space.
-
-Return ONLY valid JSON matching this schema:
+Return ONLY valid JSON matching this schema exactly:
 {{
-  "trends": [
+  "themes": [
     {{
-      "industry": "payments",
-      "trend": "embedded finance APIs for SME platforms",
-      "search_queries": [
-        "embedded finance API startup Central America 2025 2026",
-        "banking as a service BaaS LATAM startup seed"
-      ]
+      "sector": "Fintech",
+      "incumbents_disrupted": "Banco Nacional, BAC, Tigo Money",
+      "disruption_pattern": "Bypass",
+      "why_now": "70% unbanked population + smartphone penetration crossing 60% in CA",
+      "key_evidence": [
+        "3 new embedded finance startups announced in CR this quarter",
+        "BAC launched digital wallet — confirms market validation"
+      ],
+      "counterargument": "Incumbent banks have launched their own apps; regulatory moat remains high",
+      "ca_dr_angle": "SME credit gap is $4B in CA — banks don't serve businesses under $500K revenue",
+      "companies_spotted": ["Paggo", "Zunify"],
+      "next_research": [
+        "embedded finance API startup Central America seed 2025 2026",
+        "SME credit fintech Dominican Republic founder"
+      ],
+      "confidence": "strong_signal"
     }}
   ],
-  "memo_summary": "2-3 paragraph executive summary of what's changing and what to watch for"
+  "memo_summary": "2-3 paragraph executive summary of what is changing and what to watch for this week"
 }}
+
+confidence must be one of: strong_signal, emerging, speculative
+disruption_pattern must be one of: Bypass, Unbundling, New category, Digitization, Cost collapse, Platform shift
 
 Search results:
 {results}
@@ -171,6 +192,7 @@ def research_disruption_trends(dry_run: bool = False) -> dict:
 
     memo_text = ""
     dynamic_queries: list[str] = []
+    themes: list[dict] = []
 
     try:
         client = anthropic.Anthropic(api_key=config.get_key("ANTHROPIC_API_KEY"))
@@ -199,22 +221,26 @@ def research_disruption_trends(dry_run: bool = False) -> dict:
 
         data = json.loads(raw)
         memo_text = data.get("memo_summary", "").strip()
+        themes: list[dict] = data.get("themes", [])
 
-        # Extract dynamic queries from each trend (capped at 8 total)
-        for trend in data.get("trends", []):
-            for q in trend.get("search_queries", []):
+        # Extract dynamic queries from each theme's search_queries (capped at 8 total)
+        for theme in themes:
+            for q in theme.get("next_research", []):
                 if q and len(dynamic_queries) < 8:
                     dynamic_queries.append(q)
 
+        logger.info(f"Step 0 — {len(themes)} disruption theme(s) extracted.")
+
     except json.JSONDecodeError as exc:
         logger.warning(f"Step 0 — Disruption memo JSON parse failed: {exc}. Skipping dynamic queries.")
+        themes = []
     except Exception as exc:
         logger.warning(f"Step 0 — Disruption Claude call failed: {exc}. Skipping memo.")
-        return {"queries": [], "memo_path": "", "memo_text": ""}
+        return {"queries": [], "memo_path": "", "memo_text": "", "themes": []}
 
     if not memo_text:
         logger.info("Step 0 — Empty memo; skipping save.")
-        return {"queries": dynamic_queries, "memo_path": "", "memo_text": ""}
+        return {"queries": dynamic_queries, "memo_path": "", "memo_text": "", "themes": themes}
 
     # ── Step 3: Save memo to .tmp/ ─────────────────────────────────────────
     run_date = datetime.date.today().isoformat()
@@ -236,4 +262,4 @@ def research_disruption_trends(dry_run: bool = False) -> dict:
         memo_path = ""  # don't report a path that wasn't written
 
     logger.info(f"Step 0 — {len(dynamic_queries)} dynamic disruption queries generated.")
-    return {"queries": dynamic_queries, "memo_path": memo_path, "memo_text": memo_text}
+    return {"queries": dynamic_queries, "memo_path": memo_path, "memo_text": memo_text, "themes": themes}

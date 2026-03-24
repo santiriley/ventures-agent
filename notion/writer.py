@@ -254,6 +254,179 @@ def push_lead(profile: CompanyProfile) -> str:
     return "created"
 
 
+# ── Disruption Research push ─────────────────────────────────────────────────
+
+def push_disruption_memo(theme: dict, run_date: str) -> str:
+    """
+    Push one structured disruption sector theme to NOTION_DB_DISRUPTION.
+
+    Deduplicates by sector + quarter — if a page for this sector already exists
+    in the same quarter, it is updated in place rather than duplicated.
+
+    Returns "created" | "updated" | "skipped" (no DB configured) | "failed"
+
+    Required Notion DB schema (NOTION_SETUP.md §4):
+      Name                  (title)
+      Sector                (select)
+      Date                  (date)
+      Refresh Due           (date)
+      Incumbents Disrupted  (rich_text)
+      Disruption Pattern    (select)
+      Why Now               (rich_text)
+      Key Evidence          (rich_text)
+      Counterargument       (rich_text)
+      CA/DR Angle           (rich_text)
+      Companies Spotted     (rich_text)
+      Next Research         (rich_text)
+      Confidence            (select — Strong signal | Emerging | Speculative)
+      Queries Run           (rich_text)
+      Type                  (select — must have "Sector Memo" option)
+    """
+    db_id = config.get_optional_key("NOTION_DB_DISRUPTION")
+    if not db_id:
+        logger.debug("NOTION_DB_DISRUPTION not set — skipping disruption theme push.")
+        return "skipped"
+
+    sector = (theme.get("sector") or "Unknown").strip()
+    # Quarter label: e.g. "Q1 2026"
+    year = run_date[:4]
+    month = int(run_date[5:7])
+    quarter = f"Q{(month - 1) // 3 + 1} {year}"
+    page_name = f"{sector} — {quarter}"
+
+    # ── Dedup: search for existing page this quarter ──────────────────────────
+    existing_id = _search_disruption_page(db_id, page_name)
+
+    # ── Build properties ──────────────────────────────────────────────────────
+    key_evidence = "\n".join(f"• {e}" for e in (theme.get("key_evidence") or []))
+    next_research = "\n".join(f"• {q}" for q in (theme.get("next_research") or []))
+    companies_spotted = ", ".join(theme.get("companies_spotted") or [])
+
+    # Map confidence values to Notion select labels
+    _confidence_map = {
+        "strong_signal": "Strong signal",
+        "emerging": "Emerging",
+        "speculative": "Speculative",
+    }
+    confidence_label = _confidence_map.get(
+        (theme.get("confidence") or "").lower(), "Emerging"
+    )
+
+    # Refresh due = 90 days from run date
+    try:
+        refresh_due = (
+            datetime.date.fromisoformat(run_date) + datetime.timedelta(days=90)
+        ).isoformat()
+    except ValueError:
+        refresh_due = run_date
+
+    properties = {
+        "Name": {
+            "title": [{"text": {"content": page_name}}]
+        },
+        "Sector": {
+            "select": {"name": sector}
+        },
+        "Date": {
+            "date": {"start": run_date}
+        },
+        "Refresh Due": {
+            "date": {"start": refresh_due}
+        },
+        "Incumbents Disrupted": {
+            "rich_text": [{"text": {"content": (theme.get("incumbents_disrupted") or "")[:2000]}}]
+        },
+        "Disruption Pattern": {
+            "select": {"name": theme.get("disruption_pattern") or "New category"}
+        },
+        "Why Now": {
+            "rich_text": [{"text": {"content": (theme.get("why_now") or "")[:2000]}}]
+        },
+        "Key Evidence": {
+            "rich_text": [{"text": {"content": key_evidence[:2000]}}]
+        },
+        "Counterargument": {
+            "rich_text": [{"text": {"content": (theme.get("counterargument") or "")[:2000]}}]
+        },
+        "CA/DR Angle": {
+            "rich_text": [{"text": {"content": (theme.get("ca_dr_angle") or "")[:2000]}}]
+        },
+        "Companies Spotted": {
+            "rich_text": [{"text": {"content": companies_spotted[:2000]}}]
+        },
+        "Next Research": {
+            "rich_text": [{"text": {"content": next_research[:2000]}}]
+        },
+        "Confidence": {
+            "select": {"name": confidence_label}
+        },
+        "Type": {
+            "select": {"name": "Sector Memo"}
+        },
+    }
+
+    try:
+        if existing_id:
+            # Update existing page
+            resp = requests.patch(
+                f"{config.NOTION_BASE_URL}/pages/{existing_id}",
+                headers=_headers(),
+                json={"properties": properties},
+                timeout=config.REQUEST_TIMEOUT,
+            )
+        else:
+            # Create new page
+            resp = requests.post(
+                f"{config.NOTION_BASE_URL}/pages",
+                headers=_headers(),
+                json={"parent": {"database_id": db_id}, "properties": properties},
+                timeout=config.REQUEST_TIMEOUT,
+            )
+
+        if resp.status_code == 401:
+            raise EnvironmentError("Notion API auth failed — check NOTION_API_KEY.")
+
+        if resp.status_code == 400:
+            error_msg = resp.json().get("message", resp.text)
+            logger.warning(
+                f"Disruption memo schema mismatch for '{page_name}': {error_msg}. "
+                f"Check NOTION_SETUP.md §4 for required property names."
+            )
+            return "failed"
+
+        resp.raise_for_status()
+        action = "updated" if existing_id else "created"
+        logger.info(f"[{action.upper()}] Disruption theme '{page_name}' → Notion")
+        return action
+
+    except EnvironmentError:
+        raise
+    except Exception as exc:
+        logger.warning(f"Disruption memo push failed for '{page_name}': {exc}")
+        return "failed"
+
+
+def _search_disruption_page(db_id: str, page_name: str) -> str | None:
+    """Return page ID if a disruption research page with this name already exists."""
+    url = f"{config.NOTION_BASE_URL}/databases/{db_id}/query"
+    payload = {
+        "filter": {
+            "property": "Name",
+            "title": {"equals": page_name},
+        },
+        "page_size": 1,
+    }
+    try:
+        resp = requests.post(url, headers=_headers(), json=payload, timeout=config.REQUEST_TIMEOUT)
+        if resp.status_code in (400, 401):
+            return None
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        return results[0]["id"] if results else None
+    except Exception:
+        return None
+
+
 # ── Market intel push ────────────────────────────────────────────────────────
 
 def push_market_intel(memo_text: str, run_date: str, queries: list[str]) -> str:

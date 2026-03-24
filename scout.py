@@ -34,7 +34,7 @@ from monitor.batches import scan_batches, scan_tavily_queries, extract_company_n
 from monitor.disruption import research_disruption_trends
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
-from notion.writer import push_lead, push_market_intel, already_in_notion
+from notion.writer import push_lead, push_market_intel, push_disruption_memo, already_in_notion
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_FILE = config.ROOT / "scout.log"
@@ -80,6 +80,33 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             logger.warning(f"  Disruption memo Notion push failed (run continues): {exc}")
     elif dry_run and disruption.get("memo_text"):
         logger.info("  [dry-run] Disruption memo generated but not pushed to Notion.")
+
+    # ── Step 0b: Push structured disruption themes to NOTION_DB_DISRUPTION ───
+    themes = disruption.get("themes", [])
+    if themes and not dry_run:
+        logger.info(f"Step 0b — Pushing {len(themes)} disruption theme(s) to Notion...")
+        disruption_stats = {"created": 0, "updated": 0, "failed": 0, "skipped": 0}
+        for theme in themes:
+            try:
+                result = push_disruption_memo(theme, run_date=run_date)
+                disruption_stats[result] = disruption_stats.get(result, 0) + 1
+            except EnvironmentError as exc:
+                logger.error(f"  ❌ Auth error during disruption push — stopping run: {exc}")
+                _print_summary(stats, run_date, failed=True)
+                sys.exit(1)
+            except Exception as exc:
+                logger.warning(f"  Disruption theme push failed: {exc}")
+                disruption_stats["failed"] += 1
+        logger.info(
+            f"  Disruption themes: {disruption_stats['created']} created, "
+            f"{disruption_stats['updated']} updated, "
+            f"{disruption_stats['failed']} failed, "
+            f"{disruption_stats['skipped']} skipped (no DB configured)."
+        )
+    elif themes and dry_run:
+        logger.info(f"  [dry-run] {len(themes)} disruption theme(s) generated but not pushed.")
+    elif not themes:
+        logger.info("Step 0b — No disruption themes to push.")
 
     stats = {
         "mentions_found": 0,
