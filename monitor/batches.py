@@ -176,13 +176,36 @@ def funding_precheck(company_name: str) -> str | None:
 def geo_prescreen(name: str, snippet: str) -> bool:
     """
     Return True if at least 1 CA/DR geo signal is present in the combined name+snippet text.
-    Deterministic — no API call. Uses full country names only (not 2-letter codes which
-    cause false positives on common words like "payments" matching "PA" for Panama).
+    Deterministic — no API call. Fail-closed: returns False if no signal found.
+
+    Checks (in priority order):
+    1. Full country names (most reliable — e.g. "Costa Rica", "Dominican Republic")
+    2. CA/DR city names (e.g. "San José", "Santo Domingo")
+    3. Country-code TLDs in URLs (e.g. ".cr", ".gt")
+    4. CA/DR university names — word-boundary match only (prevents "TEC" matching "fintech",
+       "URL" matching web URLs, "UCA" matching "education")
     """
     text = (name + " " + snippet).lower()
-    # Use only full country names — 2-letter codes are too short for reliable text matching
-    full_names = [c.lower() for c in config.TARGET_COUNTRIES.keys()]
-    return any(country in text for country in full_names)
+
+    # Signal 1: full country names (2-letter codes excluded — too short, cause false positives)
+    if any(c.lower() in text for c in config.TARGET_COUNTRIES.keys()):
+        return True
+
+    # Signal 2: CA/DR city names
+    if any(city in text for city in config.CA_DR_CITY_NAMES):
+        return True
+
+    # Signal 3: country-code TLDs (matches ".cr" in "https://company.cr/about")
+    if any(tld in text for tld in config.CA_DR_DOMAIN_TLDS):
+        return True
+
+    # Signal 4: CA/DR university names — word-boundary only to avoid substring false positives
+    # e.g. "TEC" must not match "fintech", "URL" must not match "https://...", "UCA" != "education"
+    for uni in config.CA_DR_UNIVERSITIES:
+        if re.search(r"\b" + re.escape(uni.lower()) + r"\b", text):
+            return True
+
+    return False  # no signal found
 
 
 def scan_tavily_queries(

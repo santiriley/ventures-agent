@@ -75,6 +75,8 @@ class CompanyProfile:
     raw_input: str = ""
     portfolio_fit_score: int = 0                        # Phase 2: deterministic pattern match score (0-4)
     portfolio_fit_note: str = ""                        # Phase 2: human-readable explanation of score
+    traction_signals: list[str] = field(default_factory=list)  # concrete traction evidence (max 3)
+    founder_relevance_note: str = ""                    # one-line founder domain experience summary
     non_ca_founder_building_in_region: bool = False     # Phase 3b: non-regional founder, CA/DR company
 
 
@@ -536,7 +538,9 @@ Return ONLY valid JSON matching this schema:
       "university": "University short name"
     }
   ],
-  "notes": "Anything unusual or noteworthy"
+  "notes": "Anything unusual or noteworthy",
+  "traction_signals": ["list of concrete traction evidence strings — paying customers, revenue, active users, pilots, waitlist size. Empty array [] if none found. Max 3 items."],
+  "founder_relevance_note": "One-line summary (max 200 chars) of founders' domain experience relevant to the problem space. Cite specific prior companies/roles if notable. Write 'No prior domain experience found' if nothing relevant."
 }
 
 Rules:
@@ -545,6 +549,8 @@ Rules:
 - If multiple founders exist, include all
 - Sector must reflect the tech foundation (software, platform, API, data, hardware)
 - Stage: only use known stages — if unclear, use "unknown"
+- traction_signals: only include concrete, verifiable claims from the source. Do not infer.
+- founder_relevance_note: focus on domain relevance (e.g. fintech experience for a fintech play), not a general career summary.
 """
 
 
@@ -641,6 +647,13 @@ def enrich_with_claude(
         source=source,
         raw_input=raw_input,
     )
+
+    # New signal fields — parsed defensively; Claude may return null or wrong type
+    profile.traction_signals = [
+        s for s in (data.get("traction_signals") or [])
+        if isinstance(s, str)
+    ][:3]
+    profile.founder_relevance_note = (data.get("founder_relevance_note") or "")[:200]
 
     # Build founders
     for fd in data.get("founders") or []:

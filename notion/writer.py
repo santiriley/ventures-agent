@@ -74,6 +74,14 @@ def _is_portfolio(name: str) -> bool:
     return _normalize_name(name) in config.PORTFOLIO_COMPANIES
 
 
+def already_in_notion(name: str) -> bool:
+    """
+    Lightweight pre-enrichment check. Returns True if normalized name already
+    exists in NOTION_DB_LEADS. Makes 1 Notion API call; safe to call per candidate.
+    """
+    return _search_existing(name) is not None
+
+
 # Funding signals that suggest a stage='unknown' company is actually late-stage.
 # These are checked against notes + one_liner to catch companies Claude couldn't stage.
 _LARGE_RAISE_SIGNALS = [
@@ -155,6 +163,12 @@ def _build_page_properties(profile: CompanyProfile) -> dict:
         },
         "Portfolio Fit Note": {
             "rich_text": [{"text": {"content": profile.portfolio_fit_note or ""}}]
+        },
+        "Traction Signals": {
+            "rich_text": [{"text": {"content": "; ".join(profile.traction_signals) or ""}}]
+        },
+        "Founder Background": {
+            "rich_text": [{"text": {"content": profile.founder_relevance_note or ""}}]
         },
         "Non-CA Founder (Building in Region)": {
             "checkbox": profile.non_ca_founder_building_in_region

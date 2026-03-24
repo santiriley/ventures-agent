@@ -34,7 +34,7 @@ from monitor.batches import scan_batches, scan_tavily_queries, extract_company_n
 from monitor.disruption import research_disruption_trends
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
-from notion.writer import push_lead, push_market_intel
+from notion.writer import push_lead, push_market_intel, already_in_notion
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_FILE = config.ROOT / "scout.log"
@@ -188,6 +188,17 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             stats["skipped_late_stage_precheck"] += 1
             logger.info(f"    ⏭  {raw[:60]} — {skip_reason}")
             continue
+
+        # Pre-enrichment dedup: skip Opus call if already in Notion
+        # In dry-run mode, log but continue enriching so the full profile is still shown
+        candidate_name = raw.strip().split("\n")[0][:80]
+        if already_in_notion(candidate_name):
+            if dry_run:
+                logger.info(f"    ℹ️  [dry-run] {raw[:60]} — already in Notion (would skip)")
+            else:
+                stats["skipped_dup"] += 1
+                logger.info(f"    ⏭  {raw[:60]} — already in Notion (pre-enrichment check)")
+                continue
 
         try:
             profile = enrich_with_claude(

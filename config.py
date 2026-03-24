@@ -85,6 +85,24 @@ CA_DR_UNIVERSITIES = {
     "UNPHU", "UNIBE",
 }
 
+# CA/DR city names — supplement country-name matching in geo_prescreen()
+# Lowercase only; geo_prescreen() lowercases the text before matching.
+CA_DR_CITY_NAMES: frozenset[str] = frozenset({
+    "san josé", "san jose",                                   # Costa Rica
+    "guatemala city", "ciudad de guatemala",                   # Guatemala
+    "tegucigalpa", "san pedro sula",                          # Honduras
+    "san salvador",                                            # El Salvador
+    "managua",                                                 # Nicaragua
+    "panama city", "ciudad de panamá", "ciudad de panama",    # Panama
+    "santo domingo", "santiago de los caballeros",             # Dominican Republic
+    "belize city",                                             # Belize
+})
+
+# CA/DR country-code TLDs — catch domain URLs like "company.cr" in snippets
+CA_DR_DOMAIN_TLDS: frozenset[str] = frozenset({
+    ".cr", ".gt", ".hn", ".sv", ".ni", ".pa", ".do", ".bz"
+})
+
 PORTFOLIO_COMPANIES = {
     "abaco", "alisto", "art", "avify", "azulo", "bee", "boxful",
     "caldo", "fitune", "harvie", "human", "indi", "kleantab", "mawi",
