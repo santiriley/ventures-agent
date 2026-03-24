@@ -34,9 +34,11 @@ logger = logging.getLogger(__name__)
 # Tavily queries used to gather current context before the Claude synthesis call.
 # Keep these broad — they provide real-world grounding for the LLM prompt.
 _CONTEXT_QUERIES: list[str] = [
-    "fintech payments startup Latin America disruption 2025 2026 emerging",
-    "B2B SaaS startup Central America Dominican Republic new company 2025 2026",
+    "fintech payments wealth management startup Latin America 2025 2026",
+    "B2B SaaS enterprise AI startup Central America Dominican Republic 2025 2026",
     "venture capital investment trends Central America Dominican Republic 2025 2026",
+    "mobility transport logistics tech startup Latin America 2025 2026",
+    "climate tech carbon credits sustainability startup Central America 2025 2026",
 ]
 
 _MEMO_PROMPT_TEMPLATE = """\
@@ -44,6 +46,10 @@ You are a VC analyst assistant for Carica VC, a Central American and Dominican R
 
 The fund's portfolio is concentrated in these sectors: {sectors}.
 Key problem domains the fund has invested in: {domains}.
+
+The fund's current forward-looking investment hypotheses (use these to prioritize \
+which trends are most relevant, but do not limit yourself to only these):
+{hypotheses}
 
 Based on the Tavily search results below, write a concise market intelligence memo \
 (200-300 words) covering:
@@ -142,9 +148,24 @@ def research_disruption_trends(dry_run: bool = False) -> dict:
         sectors = "fintech, saas, logistics"
         domains = "payments, commerce, logistics"
 
+    # Read thesis hypotheses (optional — fail gracefully if file missing or unreadable)
+    hypotheses_text = ""
+    try:
+        hypotheses_path = config.ROOT / "thesis_hypotheses.md"
+        if hypotheses_path.exists():
+            raw_hyp = hypotheses_path.read_text(encoding="utf-8")
+            # Strip header comments; keep only the hypothesis sections
+            marker = "## Hypothesis"
+            idx = raw_hyp.find(marker)
+            hypotheses_text = raw_hyp[idx:] if idx >= 0 else raw_hyp
+            logger.info(f"Step 0 — Loaded thesis hypotheses ({len(hypotheses_text)} chars)")
+    except Exception as exc:
+        logger.warning(f"Step 0 — Could not read thesis_hypotheses.md: {exc}")
+
     prompt = _MEMO_PROMPT_TEMPLATE.format(
         sectors=sectors,
         domains=domains,
+        hypotheses=hypotheses_text or "No specific hypotheses provided — use portfolio sectors as the primary lens.",
         results="\n\n".join(combined_results)[:6000],
     )
 
