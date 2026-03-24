@@ -30,6 +30,7 @@ jobs:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DB_LEADS: ${{ secrets.NOTION_DB_LEADS }}
           NOTION_DB_EVENTS: ${{ secrets.NOTION_DB_EVENTS }}
+          NOTION_DB_DISRUPTION: ${{ secrets.NOTION_DB_DISRUPTION }}
           HUNTER_API_KEY: ${{ secrets.HUNTER_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           NOTIFY_EMAIL_ENABLED: ${{ secrets.NOTIFY_EMAIL_ENABLED }}
