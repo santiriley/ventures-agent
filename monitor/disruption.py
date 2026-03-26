@@ -198,7 +198,7 @@ def research_disruption_trends(dry_run: bool = False) -> dict:
         client = anthropic.Anthropic(api_key=config.get_key("ANTHROPIC_API_KEY"))
         message = client.messages.create(
             model=config.CLAUDE_MODEL_RESEARCH,
-            max_tokens=3000,  # structured themes JSON needs ~2500 tokens for 3-5 themes
+            max_tokens=4096,  # structured themes JSON needs ~3500 tokens for 3-5 themes; 3000 caused truncation
             messages=[{"role": "user", "content": prompt}],
         )
         raw = message.content[0].text.strip()
