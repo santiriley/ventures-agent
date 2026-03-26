@@ -237,6 +237,8 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
             logger.info(f"    ⏭  {raw[:60]} — {skip_reason}")
             continue
 
+        candidate_name = raw.strip().split("\n")[0][:80]
+
         # Light enrichment gate — cheap Haiku + 1 basic Tavily search before Opus
         light = light_enrich(candidate_name)
         if not light_thesis_check(light):
@@ -247,7 +249,6 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
 
         # Pre-enrichment dedup: skip Opus call if already in Notion
         # In dry-run mode, log but continue enriching so the full profile is still shown
-        candidate_name = raw.strip().split("\n")[0][:80]
         if already_in_notion(candidate_name):
             if dry_run:
                 logger.info(f"    ℹ️  [dry-run] {raw[:60]} — already in Notion (would skip)")
