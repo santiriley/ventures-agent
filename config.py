@@ -406,6 +406,19 @@ EVENT_CALENDAR_URLS: list[str] = [
     # Note: Meetup/Eventbrite pages are JS-rendered and may not scrape cleanly
 ]
 
+# Tavily queries for event discovery — handles JS-rendered pages the HTML scraper cannot reach.
+# Tuple format: (query_string, source_tag)
+EVENT_TAVILY_QUERIES: list[tuple[str, str]] = [
+    ("startup demo day pitch Costa Rica Guatemala Honduras El Salvador Panama Nicaragua 2026", "tavily:events:demoDays"),
+    ("pitch competition fintech startup Centroamérica emprendimiento 2026", "tavily:events:pitch"),
+    ("hackathon tecnología startup Dominican Republic Costa Rica Guatemala 2026", "tavily:events:hackathon"),
+    ("aceleradora cohorte startup Latin America Central America 2026 evento", "tavily:events:accelerator"),
+    ("angel investor venture capital evento inversión startup Costa Rica Panama 2026", "tavily:events:vc"),
+    ("startup week innovation forum technology Central America Caribbean 2026", "tavily:events:forum"),
+    ("INCAE INTEC PUCMM TEC UCR startup emprendimiento evento 2026", "tavily:events:uni"),
+    ("IDB Lab IADB Endeavor startup event competition Central America Dominican Republic 2026", "tavily:events:orgs"),
+]
+
 # ── Scraping / HTTP ────────────────────────────────────────────────────────
 REQUEST_TIMEOUT = 15          # seconds
 REQUEST_DELAY = 1.5           # seconds between requests (be polite)

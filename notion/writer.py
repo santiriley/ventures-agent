@@ -513,7 +513,16 @@ def _search_disruption_page(db_id: str, page_name: str) -> str | None:
     }
     try:
         resp = requests.post(url, headers=_headers(), json=payload, timeout=config.REQUEST_TIMEOUT)
-        if resp.status_code in (400, 401):
+        if resp.status_code == 401:
+            return None
+        if resp.status_code == 400:
+            msg = resp.json().get("message", "")
+            if "is a page" in msg:
+                raise EnvironmentError(
+                    "NOTION_DB_DISRUPTION points to a Notion page, not a database. "
+                    "Open the disruption database in Notion, copy the ID from the URL "
+                    "(the UUID before '?v='), and update the NOTION_DB_DISRUPTION secret."
+                )
             return None
         resp.raise_for_status()
         results = resp.json().get("results", [])
