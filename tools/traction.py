@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TractionSnapshot:
-    github_stars: int | None = None
+    github_followers: int | None = None
     github_last_commit_days: int | None = None
     app_store_rating: float | None = None
     app_store_reviews: int | None = None
@@ -192,11 +192,11 @@ def verify_traction(profile: "CompanyProfile") -> TractionSnapshot:  # type: ign
     # 1. GitHub
     gh = _check_github(profile)
     if gh:
-        snapshot.github_stars = gh.get("stars")
+        snapshot.github_followers = gh.get("stars")
         snapshot.github_last_commit_days = gh.get("last_commit_days")
         parts = []
-        if snapshot.github_stars is not None:
-            parts.append(f"{snapshot.github_stars} followers")
+        if snapshot.github_followers is not None:
+            parts.append(f"{snapshot.github_followers} followers")
         if snapshot.github_last_commit_days is not None:
             parts.append(f"last commit {snapshot.github_last_commit_days}d ago")
         elif gh.get("repos"):

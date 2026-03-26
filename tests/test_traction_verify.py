@@ -57,18 +57,18 @@ class TestTractionSnapshot:
     def test_default_snapshot_has_empty_signals(self):
         s = TractionSnapshot()
         assert s.verified_signals == []
-        assert s.github_stars is None
+        assert s.github_followers is None
         assert s.app_store_rating is None
 
     def test_snapshot_fields(self):
         s = TractionSnapshot(
-            github_stars=142,
+            github_followers=142,
             github_last_commit_days=3,
             app_store_rating=4.6,
             app_store_reviews=89,
             verified_signals=["GitHub: 142 followers, last commit 3d ago", "iOS App Store: 4.6 ⭐ (89 reviews)"],
         )
-        assert s.github_stars == 142
+        assert s.github_followers == 142
         assert len(s.verified_signals) == 2
 
 
@@ -105,7 +105,7 @@ class TestVerifyTraction:
         ):
             result = verify_traction(profile)
 
-        assert result.github_stars == 142
+        assert result.github_followers == 142
         assert result.github_last_commit_days == 3
         assert any("GitHub" in s for s in result.verified_signals)
 
@@ -136,7 +136,7 @@ class TestVerifyTraction:
             result = verify_traction(profile)
 
         assert result.verified_signals == []
-        assert result.github_stars is None
+        assert result.github_followers is None
         assert result.app_store_rating is None
 
     def test_disabled_returns_empty_snapshot(self):

@@ -19,6 +19,12 @@ from enrichment.engine import CompanyProfile
 
 logger = logging.getLogger(__name__)
 
+# In-process cache of founder LinkedIn URLs that returned no Notion match.
+# Resets each process run (correct — Notion state can change between runs,
+# but not within a single weekly run). Prevents redundant Notion API calls
+# when the same founder URL appears across multiple candidates in one run.
+_founder_url_no_match_cache: set[str] = set()
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +101,9 @@ def _search_existing_by_founders(founder_urls: list[str]) -> list[dict] | None:
     for linkedin_url in founder_urls:
         if not linkedin_url:
             continue
+        if linkedin_url in _founder_url_no_match_cache:
+            logger.debug("Founder dedup cache hit (no-match) for %s — skipping Notion query", linkedin_url)
+            continue
         payload = {
             "filter": {
                 "property": "Founder LinkedIn",
@@ -114,7 +123,10 @@ def _search_existing_by_founders(founder_urls: list[str]) -> list[dict] | None:
                 )
                 return None
             resp.raise_for_status()
-            for page in resp.json().get("results", []):
+            pages = resp.json().get("results", [])
+            if not pages:
+                _founder_url_no_match_cache.add(linkedin_url)
+            for page in pages:
                 page_id = page["id"]
                 if page_id in found:
                     continue

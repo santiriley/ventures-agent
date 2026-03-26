@@ -363,21 +363,18 @@ TAVILY_QUERY_TAGS = (
 
 # ── Firecrawl sources (Phase 4) ────────────────────────────────────────────
 # JS-rendered pages that BeautifulSoup cannot scrape.
-# senacyt.gob.pa excluded (CAPTCHA challenge — Firecrawl cannot bypass).
-# Remaining 4 URLs were candidates during Tier 3 addition (2026-03-23);
-# actual scrape quality should be verified on first run with a real key.
+# Excluded sites (do not re-add without re-testing):
+#   senacyt.gob.pa — CAPTCHA challenge, Firecrawl cannot bypass
+#   nacionemprendedora.go.cr — confirmed HTTP 404; wasted API credits
+#   accelerate2030.net/costa-rica — confirmed HTTP 500; wasted API credits
 FIRECRAWL_SOURCES: list[str] = [
-    "https://startuphonduras.com",           # JS SPA — candidate for Firecrawl
-    "https://nacionemprendedora.go.cr",      # was HTTP 404 with BS — may have recovered
-    "https://kec.ufm.edu",                   # JS SPA — Guatemala startup ecosystem
-    "https://accelerate2030.net/costa-rica", # was HTTP 500 — may have recovered
+    "https://startuphonduras.com",  # JS SPA — Honduras startup ecosystem
+    "https://kec.ufm.edu",          # JS SPA — Guatemala startup ecosystem (UFM)
 ]
 
 FIRECRAWL_SOURCE_TAGS: dict[str, str] = {
     "https://startuphonduras.com": "firecrawl:startuphonduras",
-    "https://nacionemprendedora.go.cr": "firecrawl:nacion-emprend",
     "https://kec.ufm.edu": "firecrawl:kec-ufm",
-    "https://accelerate2030.net/costa-rica": "firecrawl:accelerate2030",
 }
 
 # ── Exa monitor queries (Phase 4) ──────────────────────────────────────────
