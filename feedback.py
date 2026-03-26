@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import re
 import sys
 from collections import Counter
@@ -29,6 +30,27 @@ from pathlib import Path
 import requests
 
 import config
+
+# ── Timestamp helpers ─────────────────────────────────────────────────────────
+
+_LAST_RUN_FILE = config.TMP_DIR / "last_feedback_run.json"
+
+
+def _load_last_run_timestamp() -> str | None:
+    """Return ISO timestamp of last successful auto-apply run, or None."""
+    if _LAST_RUN_FILE.exists():
+        try:
+            data = json.loads(_LAST_RUN_FILE.read_text(encoding="utf-8"))
+            return data.get("last_run")
+        except Exception:
+            pass
+    return None
+
+
+def _save_last_run_timestamp() -> None:
+    """Save current UTC timestamp to last_feedback_run.json."""
+    ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    _LAST_RUN_FILE.write_text(json.dumps({"last_run": ts}), encoding="utf-8")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -64,19 +86,39 @@ def _notion_headers() -> dict:
     }
 
 
-def _fetch_notion_outcomes() -> list[dict]:
-    """Fetch all Passed ❌ and Portfolio ✅ leads from Notion with pagination."""
+def _fetch_notion_outcomes(since: str | None = None) -> list[dict]:
+    """Fetch Passed ❌ and Portfolio ✅ leads from Notion with pagination.
+
+    since: ISO timestamp (e.g. "2026-03-01T00:00:00Z"). When provided, only
+    leads last edited after this timestamp are returned. This prevents
+    reprocessing already-applied false positives on every weekly run.
+    """
     db_id = config.get_key("NOTION_DB_LEADS")
     url = f"{config.NOTION_BASE_URL}/databases/{db_id}/query"
     headers = _notion_headers()
 
-    body: dict = {
-        "filter": {
-            "or": [
-                {"property": "Status", "select": {"equals": "Passed ❌"}},
-                {"property": "Status", "select": {"equals": "Portfolio ✅"}},
+    status_filter = {
+        "or": [
+            {"property": "Status", "select": {"equals": "Passed ❌"}},
+            {"property": "Status", "select": {"equals": "Portfolio ✅"}},
+        ]
+    }
+
+    if since:
+        combined_filter: dict = {
+            "and": [
+                status_filter,
+                {
+                    "timestamp": "last_edited_time",
+                    "last_edited_time": {"after": since},
+                },
             ]
-        },
+        }
+    else:
+        combined_filter = status_filter
+
+    body: dict = {
+        "filter": combined_filter,
         "page_size": 100,
     }
 
@@ -632,9 +674,18 @@ def _write_calibration_draft(
 # ── Main run logic ────────────────────────────────────────────────────────────
 
 def run(dry_run: bool = False, auto_apply_only: bool = False) -> None:
+    # In auto-apply mode, only fetch leads changed since the last run
+    since: str | None = None
+    if auto_apply_only:
+        since = _load_last_run_timestamp()
+        if since:
+            print(f"Auto-apply: fetching leads edited since {since}...")
+        else:
+            print("Auto-apply: first run — fetching all outcomes...")
+
     print("Fetching Notion outcomes (Passed ❌ and Portfolio ✅)...")
     try:
-        leads = _fetch_notion_outcomes()
+        leads = _fetch_notion_outcomes(since=since)
     except EnvironmentError:
         sys.exit(1)
     except Exception as exc:
@@ -642,6 +693,10 @@ def run(dry_run: bool = False, auto_apply_only: bool = False) -> None:
         sys.exit(1)
 
     if not leads:
+        if auto_apply_only:
+            print("No new outcomes since last run — nothing to process.")
+            _save_last_run_timestamp()
+            return
         print("No Passed ❌ or Portfolio ✅ leads found in Notion yet.")
         print("Mark some leads and try again.")
         return
@@ -670,6 +725,7 @@ def run(dry_run: bool = False, auto_apply_only: bool = False) -> None:
     new_fps_added = _auto_apply_false_positives(new_fps, dry_run=dry_run)
 
     if auto_apply_only:
+        _save_last_run_timestamp()
         return  # stop here — scout.py only needs this step
 
     # Source quality + pattern analysis

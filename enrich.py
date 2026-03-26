@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 import config
-from enrichment.engine import enrich_with_claude, load_calibration, normalize_for_fp, CompanyProfile
+from enrichment.engine import enrich_with_claude, load_calibration, normalize_for_fp, CompanyProfile, light_enrich, light_thesis_check
 from notion.writer import push_lead
 
 # ── Load calibration at startup ───────────────────────────────────────────────
@@ -245,10 +245,27 @@ def main() -> None:
         "--brief", action="store_true",
         help="Generate a pre-meeting analyst brief"
     )
+    parser.add_argument(
+        "--light", action="store_true",
+        help="Run light enrich only (cheap pre-screen: Haiku + 1 basic Tavily search)"
+    )
 
     args = parser.parse_args()
 
-    if args.inbound:
+    if args.light and args.input:
+        result = light_enrich(args.input)
+        passes = light_thesis_check(result)
+        print(f"\n  Name:            {result['name']}")
+        print(f"  Country:         {result.get('country') or 'unknown'}")
+        print(f"  Sector:          {result.get('sector') or 'unknown'}")
+        print(f"  Stage:           {result.get('stage') or 'unknown'}")
+        print(f"  CA/DR signal:    {result['has_ca_dr_signal']}")
+        if passes:
+            print("  Result:          ✅  Passes — would proceed to full enrichment")
+        else:
+            print(f"  Result:          ⏭  Filtered — {result.get('skip_reason', 'below threshold')}")
+        print()
+    elif args.inbound:
         run_inbound(no_push=args.no_push)
     elif args.batch:
         run_batch(args.batch, no_push=args.no_push)

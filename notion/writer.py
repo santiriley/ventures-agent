@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from dataclasses import replace as _dc_replace
 
 import requests
 
@@ -68,6 +69,66 @@ def _search_existing(name: str) -> str | None:
         if _normalize_name(existing_name) == needle:
             return page["id"]
     return None
+
+
+def _search_existing_by_founders(founder_urls: list[str]) -> list[dict] | None:
+    """
+    Search for existing Notion leads that share a founder LinkedIn URL.
+
+    Runs one query per URL (Notion API does not support 'contains any of' natively).
+    Returns list of {name, status, page_id} dicts, or None if no matches found.
+    Logs a warning if len(founder_urls) > 4 (unusual; still runs but may be slow).
+    """
+    if not founder_urls:
+        return None
+
+    if len(founder_urls) > 4:
+        logger.warning(
+            f"_search_existing_by_founders called with {len(founder_urls)} URLs — "
+            "this is unusual; running {len(founder_urls)} Notion queries."
+        )
+
+    db_id = config.get_key("NOTION_DB_LEADS")
+    url = f"{config.NOTION_BASE_URL}/databases/{db_id}/query"
+    found: dict[str, dict] = {}  # page_id → result, dedup across queries
+
+    for linkedin_url in founder_urls:
+        if not linkedin_url:
+            continue
+        payload = {
+            "filter": {
+                "property": "Founder LinkedIn",
+                "rich_text": {"contains": linkedin_url},
+            },
+            "page_size": 10,
+        }
+        try:
+            resp = requests.post(url, headers=_headers(), json=payload, timeout=config.REQUEST_TIMEOUT)
+            if resp.status_code == 401:
+                raise EnvironmentError("Notion API auth failed — check NOTION_API_KEY.")
+            if resp.status_code in (400, 404):
+                # Property doesn't exist yet — gracefully skip founder dedup
+                logger.debug(
+                    "Founder LinkedIn property not found in Notion schema — "
+                    "skipping founder dedup (add property per NOTION_SETUP.md)"
+                )
+                return None
+            resp.raise_for_status()
+            for page in resp.json().get("results", []):
+                page_id = page["id"]
+                if page_id in found:
+                    continue
+                title_parts = page.get("properties", {}).get("Name", {}).get("title", [])
+                name = "".join(t.get("plain_text", "") for t in title_parts)
+                status_parts = page.get("properties", {}).get("Status", {}).get("select") or {}
+                status = status_parts.get("name", "")
+                found[page_id] = {"name": name, "status": status, "page_id": page_id}
+        except EnvironmentError:
+            raise
+        except Exception as exc:
+            logger.debug("Founder dedup query failed for %s: %s", linkedin_url, exc)
+
+    return list(found.values()) if found else None
 
 
 def _is_portfolio(name: str) -> bool:
@@ -173,6 +234,9 @@ def _build_page_properties(profile: CompanyProfile) -> dict:
         "Non-CA Founder (Building in Region)": {
             "checkbox": profile.non_ca_founder_building_in_region
         },
+        "Founder LinkedIn": {
+            "rich_text": [{"text": {"content": ", ".join(profile.founder_linkedin_urls)}}]
+        },
     }
 
 
@@ -206,11 +270,42 @@ def push_lead(profile: CompanyProfile) -> str:
         logger.info(f"[SKIP stage] {profile.name} — stage '{profile.stage}' outside fund mandate")
         return "stage_blocked"
 
-    # Duplicate check
+    # Duplicate check — by company name
     existing_id = _search_existing(profile.name)
     if existing_id:
         logger.info(f"[SKIP duplicate] {profile.name} already in Notion ({existing_id})")
         return "duplicate"
+
+    # Founder-level dedup — catches same founder at a new company
+    founder_matches = _search_existing_by_founders(
+        getattr(profile, "founder_linkedin_urls", [])
+    )
+    if founder_matches:
+        for match in founder_matches:
+            old_company = match["name"]
+            status = match["status"]
+            if "Portfolio" in status:
+                logger.info(
+                    f"[SKIP portfolio founder] {profile.name} — founder previously at "
+                    f"portfolio company '{old_company}'"
+                )
+                return "portfolio"
+            elif "Passed" in status:
+                # Founder was passed on — still push but flag for re-evaluation
+                logger.info(
+                    f"[FOUNDER REENGAGEMENT] {profile.name} — founder previously seen at "
+                    f"'{old_company}' (status: {status}). Pushing with re-evaluation note."
+                )
+                note = f"⚠️ Founder previously seen at {old_company} (status: {status}). Re-evaluate."
+                updated_notes = (note + "\n" + profile.notes).strip() if profile.notes else note
+                profile = _dc_replace(profile, notes=updated_notes)
+            else:
+                # Founder is active in another pipeline entry — skip to avoid duplicate diligence
+                logger.info(
+                    f"[SKIP founder in pipeline] {profile.name} — founder already in "
+                    f"pipeline at '{old_company}' (status: {status})"
+                )
+                return "duplicate"
 
     # Build page
     db_id = config.get_key("NOTION_DB_LEADS")

@@ -29,6 +29,9 @@ OPTIONAL_KEYS = {
     "NOTION_DB_DISRUPTION": "Notion database for structured disruption research sector memos (optional)",
     "HUNTER_API_KEY": "hunter.io → free tier",
     "TAVILY_API_KEY": "app.tavily.com → API Keys (free tier available)",
+    "PROXYCURL_API_KEY": "nubela.co/proxycurl ($0.01/profile, improves geo scoring accuracy)",
+    "FIRECRAWL_API_KEY": "firecrawl.dev (scrapes JS-heavy sites for pre-raise signals)",
+    "EXA_API_KEY": "exa.ai (neural search, broadens CA/DR startup coverage)",
 }
 
 
@@ -122,6 +125,19 @@ LEGAL_SUFFIXES = (
     " s.a.", " s.a.s.", " s.r.l.", " s.r.l", " corp", " corp.",
     " co.", " co", " srl", " sa",
 )
+
+# ── Feature kill switches ─────────────────────────────────────────────────
+# Set to False to disable a feature without removing code.
+# Missing API key always disables the feature regardless of these flags.
+LINKEDIN_ENRICH_ENABLED: bool = True   # Phase 3: Proxycurl LinkedIn enrichment
+FIRECRAWL_ENABLED: bool = True         # Phase 4: Firecrawl JS-site scraping
+EXA_ENABLED: bool = True               # Phase 4: Exa neural search
+TRACTION_VERIFY_ENABLED: bool = True   # Phase 5: App Store / Play Store / GitHub traction
+
+# ── Tiered enrichment ─────────────────────────────────────────────────────
+# Minimum light_thesis_check score for a candidate to proceed to full enrichment.
+# Leads below this threshold are skipped without spending on Opus or advanced Tavily.
+LIGHT_ENRICH_THRESHOLD = 2
 
 # ── Stage filtering ────────────────────────────────────────────────────────
 # Stages that are outside the fund mandate (Pre-seed · Seed · Series A).
@@ -344,6 +360,44 @@ TAVILY_QUERY_TAGS = (
     + THESIS_ADJACENT_TAGS
     + DR_SPECIFIC_TAGS
 )
+
+# ── Firecrawl sources (Phase 4) ────────────────────────────────────────────
+# JS-rendered pages that BeautifulSoup cannot scrape.
+# senacyt.gob.pa excluded (CAPTCHA challenge — Firecrawl cannot bypass).
+# Remaining 4 URLs were candidates during Tier 3 addition (2026-03-23);
+# actual scrape quality should be verified on first run with a real key.
+FIRECRAWL_SOURCES: list[str] = [
+    "https://startuphonduras.com",           # JS SPA — candidate for Firecrawl
+    "https://nacionemprendedora.go.cr",      # was HTTP 404 with BS — may have recovered
+    "https://kec.ufm.edu",                   # JS SPA — Guatemala startup ecosystem
+    "https://accelerate2030.net/costa-rica", # was HTTP 500 — may have recovered
+]
+
+FIRECRAWL_SOURCE_TAGS: dict[str, str] = {
+    "https://startuphonduras.com": "firecrawl:startuphonduras",
+    "https://nacionemprendedora.go.cr": "firecrawl:nacion-emprend",
+    "https://kec.ufm.edu": "firecrawl:kec-ufm",
+    "https://accelerate2030.net/costa-rica": "firecrawl:accelerate2030",
+}
+
+# ── Exa monitor queries (Phase 4) ──────────────────────────────────────────
+# Neural search — different from Tavily's keyword index; surfaces different results.
+# Mirror TAVILY_MONITOR_QUERIES topics but Exa's semantic index returns unique hits.
+EXA_MONITOR_QUERIES: list[str] = [
+    "pre-seed seed startup founder Costa Rica Guatemala Honduras El Salvador Panama Nicaragua Dominican Republic",
+    "fintech startup Central America Dominican Republic early stage 2024 2025 2026",
+    "startup pitch competition demo day Central America Caribe 2025 2026",
+    "accelerator cohort Central America Dominican Republic startup 2025 2026",
+    "seed round startup Centroamérica emprendimiento tecnología 2025 2026",
+]
+
+EXA_QUERY_TAGS: list[str] = [
+    "exa:latam-preseed",
+    "exa:fintech-cadr",
+    "exa:pitchcomp",
+    "exa:cohorts",
+    "exa:seed-espanol",
+]
 
 EVENT_CALENDAR_URLS: list[str] = [
     # ── Regional startup event calendars ──

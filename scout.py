@@ -29,8 +29,8 @@ from pathlib import Path
 
 import config
 from tools.notify import send_run_summary
-from enrichment.engine import enrich_with_claude, load_calibration
-from monitor.batches import scan_batches, scan_tavily_queries, extract_company_names, geo_prescreen, stage_prescreen, funding_precheck
+from enrichment.engine import enrich_with_claude, load_calibration, light_enrich, light_thesis_check
+from monitor.batches import scan_batches, scan_tavily_queries, scan_firecrawl_sources, scan_exa_queries, extract_company_names, geo_prescreen, stage_prescreen, funding_precheck
 from monitor.disruption import research_disruption_trends
 from monitor.network import scan_network
 from monitor.events import scan_events, push_events_to_notion
@@ -68,6 +68,8 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     disruption = research_disruption_trends(dry_run=dry_run)
     dynamic_queries = disruption.get("queries", [])
     logger.info(f"  {len(dynamic_queries)} dynamic disruption queries generated.")
+    # Initialise source counters (updated in Step 1)
+    _source_counts: dict[str, int] = {}
 
     if disruption.get("memo_text") and not dry_run:
         try:
@@ -115,6 +117,7 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
         "skipped_late_stage_snippet": 0,
         "skipped_false_positive": 0,
         "skipped_late_stage_precheck": 0,
+        "skipped_light_enrich": 0,
         "added": 0,
         "skipped_duplicate": 0,
         "skipped_portfolio": 0,
@@ -137,7 +140,25 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
     )  # list[tuple[str, str]] (text, source_tag)
     logger.info(f"  {len(tavily_items)} Tavily query result(s) added.")
 
-    all_items = batch_items + tavily_items
+    logger.info("Step 1c — Scanning Firecrawl JS-heavy sources...")
+    firecrawl_items = scan_firecrawl_sources()
+    logger.info(f"  {len(firecrawl_items)} Firecrawl source(s) with content.")
+
+    logger.info("Step 1d — Running Exa neural search queries...")
+    exa_items = scan_exa_queries()
+    logger.info(f"  {len(exa_items)} Exa query result(s) added.")
+
+    all_items = batch_items + tavily_items + firecrawl_items + exa_items
+    _source_counts = {
+        "Batches": len(batch_items),
+        "Tavily": len(tavily_items),
+        "Firecrawl": len(firecrawl_items),
+        "Exa": len(exa_items),
+    }
+    logger.info(
+        "Source breakdown — "
+        + " | ".join(f"{k}: {v}" for k, v in _source_counts.items())
+    )
 
     # ── Step 2: Scan portfolio networks ──────────────────────────────────────
     logger.info("Step 2 — Scanning portfolio networks...")
@@ -214,6 +235,14 @@ def run_weekly_monitor(dry_run: bool = False) -> None:
         if skip_reason:
             stats["skipped_late_stage_precheck"] += 1
             logger.info(f"    ⏭  {raw[:60]} — {skip_reason}")
+            continue
+
+        # Light enrichment gate — cheap Haiku + 1 basic Tavily search before Opus
+        light = light_enrich(candidate_name)
+        if not light_thesis_check(light):
+            stats["skipped_light_enrich"] += 1
+            reason = light.get("skip_reason", "below threshold")
+            logger.info(f"    ⏭  {raw[:60]} — light enrich filtered ({reason})")
             continue
 
         # Pre-enrichment dedup: skip Opus call if already in Notion
@@ -326,6 +355,7 @@ def _print_summary(stats: dict, run_date: str, failed: bool = False) -> None:
     logger.info(f"  Candidates:            {stats['candidates']}")
     logger.info(f"  Skipped (false pos):   {stats.get('skipped_false_positive', 0)}")
     logger.info(f"  Skipped (precheck):    {stats.get('skipped_late_stage_precheck', 0)}")
+    logger.info(f"  Skipped (light enrich):{stats.get('skipped_light_enrich', 0)}")
     logger.info(f"  Added to Notion:       {stats['added']}")
     logger.info(f"  Skipped (dup):         {stats['skipped_duplicate']}")
     logger.info(f"  Skipped (portf.):      {stats['skipped_portfolio']}")

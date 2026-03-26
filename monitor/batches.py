@@ -290,6 +290,74 @@ def scan_tavily_queries(
     return results_out
 
 
+def scan_firecrawl_sources() -> list[tuple[str, str]]:
+    """
+    Scrape JS-heavy accelerator/incubator pages via Firecrawl.
+    Returns (markdown_text, source_tag) tuples for pages with content >= 200 chars.
+
+    Requires FIRECRAWL_API_KEY and FIRECRAWL_ENABLED=True. Silently skips otherwise.
+    Each URL is logged as a separate source for tracking.
+    """
+    if not config.FIRECRAWL_ENABLED:
+        return []
+
+    if not config.get_optional_key("FIRECRAWL_API_KEY"):
+        logger.debug("No FIRECRAWL_API_KEY — skipping Firecrawl sources.")
+        return []
+
+    from tools.firecrawl_client import scrape_with_firecrawl
+
+    results: list[tuple[str, str]] = []
+    for url in config.FIRECRAWL_SOURCES:
+        tag = config.FIRECRAWL_SOURCE_TAGS.get(url, f"firecrawl:{url.split('//')[-1].split('/')[0]}")
+        logger.info(f"Firecrawl scrape: {url}")
+        text = scrape_with_firecrawl(url)
+        if len(text) >= 200:
+            results.append((text, tag))
+            logger.info(f"  → {len(text)} chars scraped from {tag}")
+        else:
+            logger.info(f"  → Insufficient content from {url} (got {len(text)} chars) — skipping")
+        time.sleep(config.REQUEST_DELAY)
+
+    return results
+
+
+def scan_exa_queries() -> list[tuple[str, str]]:
+    """
+    Run EXA_MONITOR_QUERIES via Exa neural search.
+    Returns (combined_text, source_tag) tuples, one per query.
+
+    Requires EXA_API_KEY and EXA_ENABLED=True. Silently skips otherwise.
+    Results pass through the same extract_company_names() + geo_prescreen()
+    pipeline as Tavily results.
+    """
+    if not config.EXA_ENABLED:
+        return []
+
+    if not config.get_optional_key("EXA_API_KEY"):
+        logger.debug("No EXA_API_KEY — skipping Exa queries.")
+        return []
+
+    from tools.exa_search import exa_search
+
+    results: list[tuple[str, str]] = []
+    for i, query in enumerate(config.EXA_MONITOR_QUERIES):
+        tag = config.EXA_QUERY_TAGS[i] if i < len(config.EXA_QUERY_TAGS) else f"exa:{i}"
+        logger.info(f"Exa query [{tag}]: {query[:60]}...")
+        hits = exa_search(query, num_results=10)
+        if hits:
+            combined = " ".join(
+                f"{r.get('title', '')} {r.get('text', '')}" for r in hits
+            )
+            results.append((combined, tag))
+            logger.info(f"  → {len(hits)} result(s)")
+        else:
+            logger.info("  → No results")
+        time.sleep(config.REQUEST_DELAY)
+
+    return results
+
+
 def scan_batches() -> list[tuple[str, str]]:
     """
     Scan all configured accelerator batch URLs for new company mentions.

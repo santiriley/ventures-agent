@@ -177,6 +177,9 @@ NOTION_DB_LEADS         # From Notion URL: notion.so/{THIS_PART}?v=...
 NOTION_DB_EVENTS        # Second database for events
 HUNTER_API_KEY          # hunter.io → free tier (contact verification)
 TAVILY_API_KEY          # app.tavily.com → free tier (highly recommended; enables JS-heavy site monitoring)
+PROXYCURL_API_KEY       # proxycurl.com ($0.01/profile) — structured LinkedIn data, improves geo scoring
+FIRECRAWL_API_KEY       # firecrawl.dev — scrapes JS-heavy sites that BeautifulSoup cannot access
+EXA_API_KEY             # exa.ai — neural search with different index coverage than Tavily
 
 # Email notifications — tools/notify.py (all four required if enabled)
 NOTIFY_EMAIL_ENABLED    # Set to "true" to enable post-run email summaries
@@ -263,10 +266,14 @@ Never attempt to proceed without a required key. Stop immediately and report.
 tools/              # Python scripts for deterministic execution
   research.py       #   Web research — Tavily primary, BeautifulSoup fallback
   outreach.py       #   First-touch email DRAFT generator (analyst must review before sending)
-  briefing.py       #   Pre-meeting analyst brief generator
+  briefing.py       #   Pre-meeting analyst brief generator (includes Verified Traction section)
   notify.py         #   Optional post-run email summaries via Gmail SMTP
   retry.py          #   Exponential backoff decorator for flaky network calls
-  github.py         #   GitHub public API lookup (implemented; not yet wired into pipeline)
+  github.py         #   GitHub public API lookup
+  linkedin.py       #   Proxycurl LinkedIn profile enrichment (optional; improves geo scoring)
+  firecrawl_client.py  #   Firecrawl scraper for JS-heavy sites (optional)
+  exa_search.py     #   Exa neural search client (optional; supplements Tavily)
+  traction.py       #   Deterministic traction verification — GitHub, App Store, Play Store
 workflows/          # Markdown SOPs defining what to do and how
 .env                # API keys and environment variables (NEVER store secrets anywhere else)
 .env.example        # Template — copy to .env and fill in values
@@ -274,17 +281,21 @@ workflows/          # Markdown SOPs defining what to do and how
 NOTION_SETUP.md     # Step-by-step Notion database setup guide
 
 enrichment/         # Core enrichment engine (geo, contact, thesis scoring)
-  engine.py         #   enrich_with_claude() · geo_score() · thesis_score() · find_contact()
+  engine.py         #   enrich_with_claude() · light_enrich() · light_thesis_check() · geo_score() · thesis_score() · find_contact()
 monitor/            # Monitoring scripts (batches, network, events)
-  batches.py        #   scan_batches() + scan_tavily_queries() + extract_company_names()
+  batches.py        #   scan_batches() + scan_tavily_queries() + scan_firecrawl_sources() + scan_exa_queries() + extract_company_names()
   network.py        #   Portfolio founder network scanner
   events.py         #   Event calendar scanner + Notion push
 notion/             # Notion API writer with deduplication
-  writer.py         #   push_lead() · _normalize_name() · _search_existing()
+  writer.py         #   push_lead() · _normalize_name() · _search_existing() · _search_existing_by_founders()
+intake/             # Inbound lead intake channel (LP referrals, forwarded leads)
+  handler.py        #   handle_intake() — light enrich gate → full enrichment → Notion push
+  cli.py            #   python -m intake.cli "Company Name" --referrer "LP Name"
 interface/          # Browser-based on-demand UI (planned — not yet implemented)
-config.py           # All tunable settings (not secrets)
+config.py           # All tunable settings (not secrets) — includes kill switches per optional service
 scout.py            # Weekly run orchestrator
-enrich.py           # On-demand CLI tool (primary daily use)
+enrich.py           # On-demand CLI tool (primary daily use) — supports --light flag
+feedback.py         # Feedback loop — --auto-apply reads Notion outcomes, updates calibration (timestamp-gated)
 ```
 
 **Model selection (defined in `config.py`):**

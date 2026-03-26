@@ -78,6 +78,8 @@ class CompanyProfile:
     traction_signals: list[str] = field(default_factory=list)  # concrete traction evidence (max 3)
     founder_relevance_note: str = ""                    # one-line founder domain experience summary
     non_ca_founder_building_in_region: bool = False     # Phase 3b: non-regional founder, CA/DR company
+    traction_snapshot: Any = None                       # Phase 5: TractionSnapshot (avoid circular import)
+    founder_linkedin_urls: list[str] = field(default_factory=list)  # Phase 6: for founder-level dedup
 
 
 # ── Calibration loader ──────────────────────────────────────────────────────
@@ -519,6 +521,140 @@ def _construct_email_pattern(name: str, domain: str) -> str:
     return ""
 
 
+# ── LightEnrich ─────────────────────────────────────────────────────────────
+
+LIGHT_ENRICH_SYSTEM_PROMPT = """Extract ONLY 5 fields from the startup information provided.
+Return ONLY valid JSON, no other text:
+{
+  "name": "Company name",
+  "country": "HQ country or null if unknown",
+  "sector": "Tech sector (e.g. Fintech, SaaS, Healthtech, EdTech) or 'non-tech' for traditional businesses (e.g. restaurant, retail, construction, farming, hospitality)",
+  "stage": "pre-seed / seed / series-a / series-b / series-c / growth / unknown",
+  "has_ca_dr_signal": true or false
+}
+
+has_ca_dr_signal = true if ANY of these are present:
+- Company from or operating in: Costa Rica, Guatemala, Honduras, El Salvador, Nicaragua, Panama, Dominican Republic, Belize, or their abbreviations (CR, GT, HN, SV, NI, PA, DO, BZ)
+- Founder attended a CA/DR university: INCAE, UCR, TEC, UFM, UVG, URL, ULACIT, UNITEC, UCA, UTP, INTEC, PUCMM, UASD, UNPHU, UNIBE
+- Website has .cr, .gt, .hn, .sv, .ni, .pa, .do TLD
+- Any mention of Central America, Centroamérica, Caribbean startup ecosystem
+
+Do NOT extract founder details, contact info, traction metrics, or any other fields."""
+
+_NON_TECH_SECTORS: frozenset[str] = frozenset({
+    "non-tech", "restaurant", "food service", "retail", "construction",
+    "real estate", "agriculture", "farming", "manufacturing", "textiles",
+    "mining", "hospitality", "tourism", "traditional business",
+})
+
+_TAVILY_BASIC_URL = "https://api.tavily.com/search"
+
+
+def light_enrich(raw_input: str) -> dict:
+    """
+    Cheap pre-enrichment pass: 1 basic Tavily search + 1 Claude Haiku call.
+
+    Returns a dict with keys:
+      name, country, sector, stage, has_ca_dr_signal (bool), skip_reason (str|None)
+
+    Cost: ~$0.02-0.05 vs $0.50-1.00 for full enrichment.
+    Fails open: if parsing fails, has_ca_dr_signal=True so the lead is not silently dropped.
+    """
+    import requests as _req
+
+    company_name = raw_input.strip().split("\n")[0][:80]
+
+    # 1 basic Tavily search (not advanced — cheaper and fast enough for screening)
+    search_text = ""
+    tavily_key = config.get_optional_key("TAVILY_API_KEY")
+    if tavily_key:
+        try:
+            payload = {
+                "api_key": tavily_key,
+                "query": f"{company_name} startup",
+                "search_depth": "basic",
+                "max_results": 3,
+                "include_answer": False,
+                "include_raw_content": False,
+            }
+            resp = _req.post(_TAVILY_BASIC_URL, json=payload, timeout=config.REQUEST_TIMEOUT)
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                snippets = [r.get("content", "") for r in results[:3]]
+                search_text = "\n".join(s[:300] for s in snippets if s)
+        except Exception as exc:
+            logger.debug("Light enrich Tavily search failed (non-fatal): %s", exc)
+
+    enriched_input = raw_input
+    if search_text:
+        enriched_input = f"{raw_input}\n\n--- Quick web search ---\n{search_text}"
+
+    client = anthropic.Anthropic(api_key=config.get_key("ANTHROPIC_API_KEY"))
+
+    try:
+        message = client.messages.create(
+            model=config.CLAUDE_MODEL_FAST,
+            max_tokens=256,
+            system=LIGHT_ENRICH_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": enriched_input}],
+        )
+        raw_json = message.content[0].text.strip()
+        raw_json = re.sub(r"^```(?:json)?\s*", "", raw_json)
+        raw_json = re.sub(r"\s*```$", "", raw_json)
+        brace_start = raw_json.find("{")
+        brace_end = raw_json.rfind("}")
+        if brace_start >= 0 and brace_end > brace_start:
+            raw_json = raw_json[brace_start : brace_end + 1]
+        data = json.loads(raw_json)
+    except Exception as exc:
+        logger.debug("Light enrich parse failed — failing open: %s", exc)
+        # Fail open: don't block leads when light enrich itself fails
+        return {
+            "name": company_name,
+            "country": None,
+            "sector": None,
+            "stage": "unknown",
+            "has_ca_dr_signal": True,
+            "skip_reason": None,
+        }
+
+    return {
+        "name": data.get("name") or company_name,
+        "country": data.get("country") or None,
+        "sector": data.get("sector") or None,
+        "stage": (data.get("stage") or "unknown").lower(),
+        "has_ca_dr_signal": bool(data.get("has_ca_dr_signal", False)),
+        "skip_reason": None,
+    }
+
+
+def light_thesis_check(light: dict) -> bool:
+    """
+    Quick pass/fail against Carica thesis hard requirements.
+    Sets light["skip_reason"] before returning False so callers can log the reason.
+
+    Returns True if the candidate should proceed to full enrichment.
+    """
+    # Must have a CA/DR geo signal
+    if not light.get("has_ca_dr_signal"):
+        light["skip_reason"] = "no CA/DR signal detected"
+        return False
+
+    # Must not be over-stage (Series B+)
+    stage = (light.get("stage") or "unknown").lower()
+    if stage in config.OVER_STAGE_VALUES:
+        light["skip_reason"] = f"stage '{stage}' is outside fund mandate"
+        return False
+
+    # Must be a tech sector (not a traditional business)
+    sector = (light.get("sector") or "").lower()
+    if any(kw in sector for kw in _NON_TECH_SECTORS):
+        light["skip_reason"] = f"non-tech sector: {light.get('sector')}"
+        return False
+
+    return True
+
+
 # ── EnrichWithClaude ────────────────────────────────────────────────────────
 
 ENRICH_SYSTEM_PROMPT = """You are the Carica Scout enrichment engine.
@@ -673,6 +809,40 @@ def enrich_with_claude(
             phone_prefix=fd.get("phone_prefix") or "",
             university=fd.get("university") or "",
         )
+        # ── Phase 3: Proxycurl LinkedIn enrichment ─────────────────────────
+        # Fetch structured data and merge it over Claude's inferred values
+        # before running geo_score() — Proxycurl data is more reliable.
+        if founder.linkedin_url and config.LINKEDIN_ENRICH_ENABLED:
+            try:
+                from tools.linkedin import fetch_linkedin_profile
+                lk = fetch_linkedin_profile(founder.linkedin_url)
+                if lk:
+                    # Prefer Proxycurl location over Claude's inferred value
+                    if lk.get("city") or lk.get("country_full_name"):
+                        parts = [p for p in [lk.get("city"), lk.get("country_full_name")] if p]
+                        founder.location = ", ".join(parts)
+                    # Replace education with Proxycurl's structured list
+                    if lk.get("education"):
+                        founder.education = [
+                            f"{e['school']}" + (f" ({e['starts_at']}–{e['ends_at']})" if e.get("starts_at") else "")
+                            for e in lk["education"]
+                        ]
+                        # Extract primary university abbreviation from the most recent entry
+                        first_school = (lk["education"][0].get("school") or "").upper()
+                        for ca_uni in config.CA_DR_UNIVERSITIES:
+                            if ca_uni.upper() in first_school:
+                                founder.university = ca_uni
+                                break
+                    # Supplement previous_roles with Proxycurl experiences
+                    if lk.get("experiences"):
+                        founder.previous_roles = [
+                            f"{e['title']} at {e['company']}" for e in lk["experiences"][:4]
+                        ]
+                    # Mark as verified — no longer uncertain
+                    founder.linkedin_uncertain = False
+            except Exception as exc:
+                logger.warning("Proxycurl enrichment failed for %s: %s", founder.name, exc)
+
         # Attach company country for geo signal 4
         founder.company_country = profile.country
         geo_score(founder)
@@ -726,8 +896,25 @@ def enrich_with_claude(
     if _best_geo < 2 and any(c in _text_lower for c in _region_full_names):
         profile.non_ca_founder_building_in_region = True
 
+    # ── Phase 6: Populate founder LinkedIn URLs for dedup ─────────────────
+    profile.founder_linkedin_urls = [
+        f.linkedin_url for f in profile.founders if f.linkedin_url
+    ]
+
     # Find contact (use first founder if available)
     primary_founder = profile.founders[0] if profile.founders else None
     profile.contact = find_contact(profile.website, primary_founder)
+
+    # ── Phase 5: Deterministic traction verification ───────────────────────
+    if config.TRACTION_VERIFY_ENABLED:
+        try:
+            from tools.traction import verify_traction
+            snapshot = verify_traction(profile)
+            profile.traction_snapshot = snapshot
+            if snapshot.verified_signals:
+                verified_str = "Verified traction: " + " | ".join(snapshot.verified_signals)
+                profile.notes = (profile.notes + "\n" + verified_str).strip() if profile.notes else verified_str
+        except Exception as exc:
+            logger.warning("Traction verification failed (non-fatal): %s", exc)
 
     return profile

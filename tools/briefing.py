@@ -53,6 +53,13 @@ Output structure (plain text, use ── section headers):
 • Tech foundation: [yes/no + brief reason]
 • MVP/Traction: [what's known]
 
+── Verified Traction ──
+[Include bullet points for each verified signal provided, e.g.:]
+• GitHub: [stars/followers, last commit]
+• iOS App Store: [rating, review count]
+• Play Store: [rating, review count]
+[If none provided, write: "No verified traction signals found"]
+
 ── Contact ──
 • Best email: [email] ([confidence])
 • LinkedIn DM fallback: [url or N/A]
@@ -93,6 +100,9 @@ Source: {source}
 Date found: {date_found}
 
 Notes from enrichment: {notes}
+
+Verified traction signals (deterministic checks — GitHub, App Store, Play Store):
+{verified_traction}
 """
 
 
@@ -123,6 +133,13 @@ def generate_briefing(profile: CompanyProfile) -> str:
     if not profile.name:
         raise ValueError("Cannot generate a brief for a profile with no company name.")
 
+    # Format verified traction signals (Phase 5)
+    snapshot = getattr(profile, "traction_snapshot", None)
+    if snapshot and snapshot.verified_signals:
+        verified_traction = "\n".join(f"• {s}" for s in snapshot.verified_signals)
+    else:
+        verified_traction = "None found"
+
     user_msg = BRIEFING_USER_TEMPLATE.format(
         name=profile.name,
         website=profile.website or "N/A",
@@ -138,6 +155,7 @@ def generate_briefing(profile: CompanyProfile) -> str:
         source=profile.source or "manual",
         date_found=profile.date_found or "today",
         notes=profile.notes or "None",
+        verified_traction=verified_traction,
     )
 
     client = anthropic.Anthropic(api_key=config.get_key("ANTHROPIC_API_KEY"))

@@ -80,6 +80,7 @@ The writer also pushes these fields — create them in Notion if you want them v
 | `Traction Signals` | Text | Concrete evidence: users, revenue, partnerships |
 | `Founder Background` | Text | Relevant domain experience summary |
 | `Non-CA Founder (Building in Region)` | Checkbox | True when a non-CA/DR founder is explicitly targeting the region |
+| `Founder LinkedIn` | Text | Comma-separated LinkedIn URLs for all known founders — used for founder-level deduplication |
 
 ### Recommended views
 
