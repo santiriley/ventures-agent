@@ -99,7 +99,7 @@ class TestVerifyTraction:
         }
         with (
             patch("tools.traction.config.TRACTION_VERIFY_ENABLED", True),
-            patch("tools.traction._check_github", return_value={"stars": 142, "last_commit_days": 3, "repos": 12}),
+            patch("tools.traction._check_github", return_value={"followers": 142, "last_commit_days": 3, "repos": 12}),
             patch("tools.traction._check_app_store", return_value={}),
             patch("tools.traction._check_play_store", return_value={}),
         ):

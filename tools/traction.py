@@ -58,7 +58,7 @@ def _check_github(profile: "CompanyProfile") -> dict:  # type: ignore[name-defin
                     days = _parse_days_ago(last_active)
                     # Use total public_repos as a proxy for stars (github_stats doesn't return stars directly)
                     return {
-                        "stars": stats.get("followers", 0),  # followers as engagement proxy
+                        "followers": stats.get("followers", 0),
                         "last_commit_days": days,
                         "repos": stats.get("public_repos", 0),
                     }
@@ -192,7 +192,7 @@ def verify_traction(profile: "CompanyProfile") -> TractionSnapshot:  # type: ign
     # 1. GitHub
     gh = _check_github(profile)
     if gh:
-        snapshot.github_followers = gh.get("stars")
+        snapshot.github_followers = gh.get("followers")
         snapshot.github_last_commit_days = gh.get("last_commit_days")
         parts = []
         if snapshot.github_followers is not None:
